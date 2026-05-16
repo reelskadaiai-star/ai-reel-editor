@@ -14,12 +14,9 @@ opencv-python-headless==4.9.0.80
 Pillow==10.3.0
 numpy==1.26.4
 
-# AI
-setuptools
-torch==2.3.0
-torchvision==0.18.0
+# AI — torch CPU installed separately in Dockerfile (see --index-url)
 open-clip-torch==2.24.0
-openai-whisper==20231117
+faster-whisper==1.0.3
 librosa==0.10.1
 soundfile==0.12.1
 scenedetect[opencv]==0.6.4

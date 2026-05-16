@@ -1,6 +1,6 @@
 """
-Caption generation using local OpenAI Whisper (free, runs on CPU).
-No API key required.
+Caption generation using faster-whisper (CTranslate2 backend).
+Pre-built wheels — no compilation required. Runs on CPU fine.
 """
 from __future__ import annotations
 import os
@@ -10,22 +10,26 @@ from pathlib import Path
 from loguru import logger
 
 try:
-    import whisper
+    from faster_whisper import WhisperModel
     WHISPER_AVAILABLE = True
 except ImportError:
     WHISPER_AVAILABLE = False
-    logger.warning("whisper not installed — captions disabled")
+    logger.warning("faster-whisper not installed — captions disabled")
 
 
 class CaptionGenerator:
     # Cached at class level so model loads once per worker process
-    _model = None
+    _model: "WhisperModel | None" = None
     _model_size: str = os.getenv("WHISPER_MODEL", "base")
 
     def __init__(self):
         if WHISPER_AVAILABLE and CaptionGenerator._model is None:
             logger.info(f"[Whisper] Loading model: {self._model_size}")
-            CaptionGenerator._model = whisper.load_model(self._model_size)
+            CaptionGenerator._model = WhisperModel(
+                self._model_size,
+                device="cpu",
+                compute_type="int8",   # fastest on CPU, no accuracy loss for speech
+            )
             logger.info("[Whisper] Model ready")
 
     def transcribe(self, video_path: str) -> list[dict]:
@@ -41,21 +45,21 @@ class CaptionGenerator:
             audio_path = self._extract_audio(video_path)
             logger.info(f"[Whisper] Transcribing {Path(video_path).name}")
 
-            result = self._model.transcribe(
+            segments, _info = self._model.transcribe(
                 audio_path,
                 task="transcribe",
                 word_timestamps=True,
-                verbose=False,
+                vad_filter=True,       # skip silent sections — faster
             )
 
             captions = []
-            for seg in result.get("segments", []):
-                text = seg["text"].strip()
+            for seg in segments:
+                text = seg.text.strip()
                 if not text:
                     continue
                 captions.append({
-                    "start": round(seg["start"], 3),
-                    "end": round(seg["end"], 3),
+                    "start": round(seg.start, 3),
+                    "end": round(seg.end, 3),
                     "text": text,
                     "style": "default",
                 })
