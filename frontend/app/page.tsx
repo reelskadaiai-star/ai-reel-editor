@@ -29,7 +29,7 @@ export default function HomePage() {
     try {
       const { jobId } = await uploadVideo(file);
       toast.success("Video uploaded! Analyzing…");
-      router.push(`/editor/${jobId}`);
+      router.push(`/editor?id=${jobId}`);
     } catch (err: any) {
       toast.error(err?.response?.data?.error || "Upload failed. Try again.");
       setUploading(false);
