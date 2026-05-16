@@ -18,6 +18,10 @@ const templateRoutes = require("./routes/templates");
 const app = express();
 const PORT = process.env.PORT || 4000;
 
+// Render sits behind a reverse proxy — trust it so express-rate-limit
+// can correctly read X-Forwarded-For and identify clients.
+app.set("trust proxy", 1);
+
 // ── Ensure upload/output dirs exist ──────────────────────────────────
 [process.env.UPLOADS_DIR || "./uploads", process.env.OUTPUTS_DIR || "./outputs"].forEach((d) => {
   if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
