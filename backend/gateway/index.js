@@ -45,8 +45,11 @@ const apiLimiter = rateLimit({
 });
 app.use("/api/", apiLimiter);
 
-// Serve processed outputs (behind signed check in production)
+// Serve outputs (watermarked previews)
 app.use("/outputs", express.static(path.resolve(process.env.OUTPUTS_DIR || "./outputs")));
+
+// Serve uploads so HF Space can download the raw video via URL
+app.use("/uploads", express.static(path.resolve(process.env.UPLOADS_DIR || "./uploads")));
 
 // ── Routes ────────────────────────────────────────────────────────────
 app.use("/api/auth", authRoutes);

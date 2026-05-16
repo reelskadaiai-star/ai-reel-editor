@@ -5,22 +5,31 @@ const Job = require("../models/Job");
 
 const REDIS_URL = process.env.REDIS_URL || "redis://localhost:6379";
 const AI_URL = process.env.AI_SERVICE_URL || "http://localhost:8000";
+const GATEWAY_URL = process.env.GATEWAY_PUBLIC_URL || "http://localhost:4000";
 
 // ── Queues ────────────────────────────────────────────────────────────
 const analyzeQueue = new Bull("analyze", REDIS_URL);
 const renderQueue = new Bull("render", REDIS_URL);
 
+// Build the public URL of an uploaded file so HF Space can download it
+function videoUrl(filename) {
+  return `${GATEWAY_URL}/uploads/${filename}`;
+}
+
 // ── Process: Analyze ─────────────────────────────────────────────────
 analyzeQueue.process(2, async (bullJob) => {
   const { jobId } = bullJob.data;
   logger.info(`[Queue] Analyzing job ${jobId}`);
-
   await Job.findOneAndUpdate({ jobId }, { status: "analyzing", stage: "Analyzing video content", progress: 5 });
 
   try {
-    const res = await axios.post(`${AI_URL}/analyze`, { job_id: jobId }, { timeout: 120_000 });
+    const job = await Job.findOne({ jobId });
+    const res = await axios.post(
+      `${AI_URL}/analyze`,
+      { job_id: jobId, video_url: videoUrl(job.inputFile) },
+      { timeout: 120_000 }
+    );
     const { task_id } = res.data;
-
     await Job.findOneAndUpdate({ jobId }, { celeryTaskId: task_id, progress: 10 });
     return { task_id };
   } catch (err) {
@@ -34,7 +43,6 @@ analyzeQueue.process(2, async (bullJob) => {
 renderQueue.process(1, async (bullJob) => {
   const { jobId } = bullJob.data;
   logger.info(`[Queue] Rendering job ${jobId}`);
-
   await Job.findOneAndUpdate({ jobId }, { status: "rendering", stage: "Generating reel", progress: 50 });
 
   try {
@@ -43,8 +51,9 @@ renderQueue.process(1, async (bullJob) => {
       `${AI_URL}/render`,
       {
         job_id: jobId,
+        video_url: videoUrl(job.inputFile),
+        music_url: job.musicFile ? videoUrl(job.musicFile) : null,
         template: job.template,
-        music_file: job.musicFile,
         music_offset: job.musicOffset,
         aspect_ratio: job.aspectRatio,
         caption_style: job.captionStyle,
