@@ -1,5 +1,5 @@
 "use client";
-import { useState, Suspense } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { ArrowLeft, Download, RefreshCw, Wand2 } from "lucide-react";
@@ -38,11 +38,20 @@ function EditorInner() {
     }
   );
 
+  // Once the server confirms "rendering", hand off to SWR and drop the local flag
+  useEffect(() => {
+    if (job?.status === "rendering" || job?.status === "done" || job?.status === "failed") {
+      setRendering(false);
+    }
+  }, [job?.status]);
+
   const isAnalyzing = job?.status === "analyzing" || job?.status === "queued";
-  const isRendering = job?.status === "rendering";
-  const isReadyToRender = job?.status === "done" && (job.progress ?? 0) >= 40 && !job.outputFile;
+  // Include local `rendering` flag so the UI responds immediately on first click,
+  // before SWR has had a chance to re-fetch the updated status from the server.
+  const isRendering = job?.status === "rendering" || rendering;
+  const isReadyToRender = job?.status === "done" && (job.progress ?? 0) >= 40 && !job.outputFile && !rendering;
   const isRendered = !!job?.outputFile;
-  const isFailed = job?.status === "failed";
+  const isFailed = job?.status === "failed" && !rendering;
 
   async function handleRender() {
     if (!job) return;
@@ -50,11 +59,12 @@ function EditorInner() {
     try {
       await renderJob(jobId);
       toast.success("Rendering started!");
-      // Optimistically flip to "rendering" immediately — don't wait for the next poll
-      mutate({ ...job, status: "rendering", stage: "Rendering queued", progress: 50 }, false);
+      // Trigger a background re-fetch; `rendering` stays true until job.status
+      // comes back as "rendering" from the server, keeping the UI locked.
+      mutate();
     } catch (err: any) {
       toast.error(err?.response?.data?.error || "Render failed");
-    } finally {
+      // Only clear on error — on success the SWR update will take over
       setRendering(false);
     }
   }
