@@ -3,8 +3,10 @@ import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { X, Download, Lock, CheckCircle, Loader2, Sparkles } from "lucide-react";
 import toast from "react-hot-toast";
-import axios from "axios";
+import api from "@/lib/api";
 import type { Job } from "@/lib/types";
+
+const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 
 declare global {
   interface Window { Razorpay: any }
@@ -24,7 +26,7 @@ export default function ExportModal({ job, onClose }: Props) {
   async function handlePay() {
     setLoading(true);
     try {
-      const { data: order } = await axios.post("/api/payment/create-order", { jobId: job.jobId });
+      const { data: order } = await api.post("/api/payment/create-order", { jobId: job.jobId });
 
       if (order.alreadyPaid) {
         setStep("paid");
@@ -43,7 +45,7 @@ export default function ExportModal({ job, onClose }: Props) {
         handler: async (response: any) => {
           setStep("paying");
           try {
-            await axios.post("/api/payment/verify", {
+            await api.post("/api/payment/verify", {
               razorpay_order_id: response.razorpay_order_id,
               razorpay_payment_id: response.razorpay_payment_id,
               razorpay_signature: response.razorpay_signature,
@@ -158,7 +160,7 @@ export default function ExportModal({ job, onClose }: Props) {
                 <p className="text-sm text-white/40 mt-1">Your HD reel is ready to download</p>
               </div>
               <a
-                href={`/api/jobs/${job.jobId}/download`}
+                href={`${API}/api/jobs/${job.jobId}/download`}
                 download
                 className="btn-primary w-full flex items-center justify-center gap-2"
               >

@@ -4,6 +4,9 @@ import { motion } from "framer-motion";
 import { Play, Pause, Lock, Film } from "lucide-react";
 import type { Job } from "@/lib/types";
 
+const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+function outputUrl(file: string) { return `${API}/outputs/${file}`; }
+
 interface Props { job: Job | undefined }
 
 export default function ReelPreview({ job }: Props) {
@@ -11,7 +14,7 @@ export default function ReelPreview({ job }: Props) {
 
   const hasPreview = job?.watermarkedFile || job?.outputFile;
   const videoSrc = hasPreview
-    ? `/outputs/${job!.paid ? job!.outputFile : job!.watermarkedFile}`
+    ? outputUrl(job!.paid ? job!.outputFile! : job!.watermarkedFile!)
     : null;
 
   return (
@@ -75,7 +78,7 @@ export default function ReelPreview({ job }: Props) {
       {/* Thumbnail strip */}
       {job?.thumbnailFile && (
         <img
-          src={`/outputs/${job.thumbnailFile}`}
+          src={outputUrl(job.thumbnailFile)}
           alt="Thumbnail"
           className="mt-3 w-full rounded-xl object-cover aspect-video opacity-60"
         />
