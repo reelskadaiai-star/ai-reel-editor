@@ -3,11 +3,11 @@ const axios = require("axios");
 const router = express.Router();
 
 const Job = require("../models/Job");
-const { renderQueue } = require("../services/queue");
+const { startRender } = require("../services/ai");
 const { optionalAuth } = require("../middleware/auth");
 const logger = require("../services/logger");
 
-const AI_URL = process.env.AI_SERVICE_URL || "http://localhost:8000";
+const AI_URL = process.env.AI_SERVICE_URL || "http://localhost:7860";
 
 // GET /api/jobs/:jobId — poll job status + analysis results
 router.get("/:jobId", optionalAuth, async (req, res) => {
@@ -99,7 +99,8 @@ router.post("/:jobId/render", optionalAuth, async (req, res) => {
     await Job.findOneAndUpdate({ jobId }, overrides);
   }
 
-  await renderQueue.add({ jobId }, { attempts: 2, backoff: 5000 });
+  // Fire-and-forget: call HF Space directly (no Redis/Bull needed)
+  setImmediate(() => startRender(jobId));
   await Job.findOneAndUpdate({ jobId }, { status: "rendering", stage: "Rendering queued", progress: 50 });
 
   res.json({ jobId, status: "rendering" });

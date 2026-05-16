@@ -5,7 +5,7 @@ const { v4: uuidv4 } = require("uuid");
 const router = express.Router();
 
 const Job = require("../models/Job");
-const { analyzeQueue } = require("../services/queue");
+const { startAnalyze } = require("../services/ai");
 const { optionalAuth } = require("../middleware/auth");
 const logger = require("../services/logger");
 
@@ -50,8 +50,8 @@ router.post("/", optionalAuth, upload.single("video"), async (req, res) => {
       stage: "Queued for analysis",
     });
 
-    // Push to Bull queue
-    await analyzeQueue.add({ jobId }, { attempts: 3, backoff: { type: "exponential", delay: 2000 } });
+    // Fire-and-forget: call HF Space directly (no Redis/Bull needed)
+    setImmediate(() => startAnalyze(jobId));
 
     logger.info(`Job ${jobId} created — file: ${req.file.filename}`);
     res.status(201).json({ jobId, status: "queued" });
