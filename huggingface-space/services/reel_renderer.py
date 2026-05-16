@@ -19,8 +19,6 @@ import json
 from pathlib import Path
 from loguru import logger
 
-import ffmpeg
-
 
 WATERMARK_TEXT = os.getenv("WATERMARK_TEXT", "@AIReelEditor")
 
@@ -202,19 +200,35 @@ class ReelRenderer:
 
     def _concatenate(self, clip_paths: list[str]) -> str:
         out = str(Path(self.output_dir) / f"{self.job_id}_concat.mp4")
+
+        if len(clip_paths) == 1:
+            # Single clip — just copy it directly, no concat needed
+            import shutil
+            shutil.copy2(clip_paths[0], out)
+            return out
+
         list_file = str(Path(self.output_dir) / f"{self.job_id}_list.txt")
         with open(list_file, "w") as f:
             for p in clip_paths:
                 f.write(f"file '{p}'\n")
+        # Re-encode at concat to normalise codecs/sample-rates across clips
         cmd = [
             "ffmpeg", "-y",
             "-f", "concat", "-safe", "0",
             "-i", list_file,
-            "-c", "copy",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
             out,
         ]
-        self._run(cmd)
-        os.remove(list_file)
+        try:
+            self._run(cmd)
+        finally:
+            if os.path.exists(list_file):
+                os.remove(list_file)
+
+        if not os.path.exists(out):
+            raise RuntimeError(f"Concatenation produced no output at {out}")
         return out
 
     def _apply_grade(self, video_path: str) -> str:
@@ -239,10 +253,8 @@ class ReelRenderer:
         ]
         try:
             self._run(cmd)
-            return out
         except Exception as e:
             logger.warning(f"[Renderer] Grade failed ({e}), falling back to scale-only")
-            # Fallback: just scale+crop, no colour grade
             vf_simple = f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}"
             cmd2 = [
                 "ffmpeg", "-y",
@@ -250,11 +262,14 @@ class ReelRenderer:
                 "-vf", vf_simple,
                 "-c:v", "libx264", "-preset", "fast", "-crf", "22",
                 "-pix_fmt", "yuv420p",
-                "-c:a", "aac", "-b:a", "128k",
+                "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
                 out,
             ]
             self._run(cmd2)
-            return out
+
+        if not os.path.exists(out):
+            raise RuntimeError(f"Grade step produced no output at {out}")
+        return out
 
     def _overlay_captions(self, video_path: str) -> str:
         if not self.captions:
