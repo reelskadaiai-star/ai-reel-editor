@@ -69,15 +69,23 @@ app.use((err, req, res, next) => {
 
 // ── DB & Start ────────────────────────────────────────────────────────
 async function start() {
+  const uri = process.env.MONGO_URI;
+  if (!uri) {
+    logger.error("❌ MONGO_URI environment variable is not set!");
+    process.exit(1);
+  }
+  // Log a masked URI so we can confirm it's being picked up
+  const masked = uri.replace(/:([^@]+)@/, ":****@");
+  logger.info(`🔌 Connecting to MongoDB: ${masked}`);
+
   try {
-    await mongoose.connect(process.env.MONGO_URI, {
-      serverSelectionTimeoutMS: 5000,
+    await mongoose.connect(uri, {
+      serverSelectionTimeoutMS: 10000,
     });
     logger.info("✅ MongoDB connected");
-
     app.listen(PORT, () => logger.info(`🚀 Gateway running on port ${PORT}`));
   } catch (err) {
-    logger.error("❌ Failed to connect to MongoDB:", err.message);
+    logger.error(`❌ MongoDB connection failed: ${err.message}`);
     process.exit(1);
   }
 }
