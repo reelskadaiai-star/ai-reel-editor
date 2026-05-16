@@ -188,6 +188,7 @@ class ReelRenderer:
             "-i", self.video_path,
             "-t", str(clip["dur"]),
             "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+            "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", "128k",
             "-avoid_negative_ts", "make_zero",
             out,
@@ -221,7 +222,7 @@ class ReelRenderer:
         w, h = ASPECT_RES.get(self.aspect_ratio, ("1080", "1920"))
         grade = FILTERS.get(self.content_type, FILTERS["unknown"])
 
-        # Crop to aspect ratio, then scale
+        # Scale+crop to target aspect ratio, then apply colour grade
         vf = (
             f"scale={w}:{h}:force_original_aspect_ratio=increase,"
             f"crop={w}:{h},"
@@ -232,11 +233,28 @@ class ReelRenderer:
             "-i", video_path,
             "-vf", vf,
             "-c:v", "libx264", "-preset", "fast", "-crf", "22",
-            "-c:a", "copy",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "128k",   # re-encode audio (not copy) for compatibility
             out,
         ]
-        self._run(cmd)
-        return out
+        try:
+            self._run(cmd)
+            return out
+        except Exception as e:
+            logger.warning(f"[Renderer] Grade failed ({e}), falling back to scale-only")
+            # Fallback: just scale+crop, no colour grade
+            vf_simple = f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}"
+            cmd2 = [
+                "ffmpeg", "-y",
+                "-i", video_path,
+                "-vf", vf_simple,
+                "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+                "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-b:a", "128k",
+                out,
+            ]
+            self._run(cmd2)
+            return out
 
     def _overlay_captions(self, video_path: str) -> str:
         if not self.captions:
@@ -290,14 +308,30 @@ class ReelRenderer:
                 out,
             ]
         else:
-            # No music — just copy
+            # No music — re-encode to ensure consistent output format
             cmd = [
                 "ffmpeg", "-y",
                 "-i", video_path,
-                "-c", "copy",
+                "-c:v", "copy",
+                "-c:a", "aac", "-b:a", "128k",
+                "-ar", "44100",
                 out,
             ]
-        self._run(cmd)
+        try:
+            self._run(cmd)
+        except Exception as e:
+            logger.warning(f"[Renderer] Audio mix failed ({e}), copying video-only")
+            # Fallback: copy video, add silent audio
+            cmd_fallback = [
+                "ffmpeg", "-y",
+                "-i", video_path,
+                "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+                "-c:v", "copy",
+                "-c:a", "aac", "-b:a", "128k",
+                "-shortest",
+                out,
+            ]
+            self._run(cmd_fallback)
         return out
 
     def _caption_style_params(self, style: str) -> str:
