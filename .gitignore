@@ -1,0 +1,12 @@
+node_modules/
+__pycache__/
+*.pyc
+.env
+uploads/
+outputs/
+logs/
+.next/
+out/
+*.egg-info/
+.DS_Store
+model_cache/

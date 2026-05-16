@@ -1,0 +1,11 @@
+# Cloudflare Pages — wrangler config
+# Used by: wrangler pages deploy out/
+# Docs: https://developers.cloudflare.com/pages/
+
+name = "reel-ai"
+compatibility_date = "2024-05-01"
+
+# Pages project — static assets served from Next.js export output dir
+pages_build_output_dir = "out"
+
+# No workers needed — purely static export, all API calls go to Render.

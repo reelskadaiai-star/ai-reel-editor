@@ -1,0 +1,158 @@
+## Render Blueprint — AI Reel Editor
+## Deploy: https://dashboard.render.com/blueprints → "New Blueprint Instance"
+## Docs: https://render.com/docs/blueprint-spec
+
+services:
+  # ── Redis ──────────────────────────────────────────────────────────
+  - type: redis
+    name: reel-redis
+    plan: free          # upgrade to starter ($10/mo) for persistence + memory
+    maxmemoryPolicy: allkeys-lru
+    ipAllowList: []     # private only — only Render services can connect
+
+  # ── Node.js API Gateway ────────────────────────────────────────────
+  - type: web
+    name: reel-gateway
+    runtime: docker
+    dockerfilePath: ./backend/gateway/Dockerfile
+    dockerContext: ./backend/gateway
+    plan: starter       # $7/mo — always on (no spin-down), needed for upload handling
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "4000"
+      - key: MONGO_URI
+        sync: false                   # set manually in dashboard
+      - key: JWT_SECRET
+        generateValue: true           # Render generates a secure random value
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+      - key: RAZORPAY_WEBHOOK_SECRET
+        sync: false
+      - key: EXPORT_PRICE_INR
+        value: "2000"
+      - key: WATERMARK_TEXT
+        value: "@ReelAI"
+      - key: FRONTEND_URL
+        sync: false                   # set to your Cloudflare Pages URL
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: reel-redis
+          property: connectionString
+      - key: AI_SERVICE_URL
+        fromService:
+          type: web
+          name: reel-ai-service
+          property: host
+      - key: STORAGE_TYPE
+        value: r2                     # switch to r2 for Cloudflare R2 storage
+      - key: CLOUDFLARE_R2_ENDPOINT
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+    disk:
+      name: reel-uploads
+      mountPath: /app/uploads
+      sizeGB: 10
+    autoDeploy: true
+
+  # ── Python FastAPI AI Service ──────────────────────────────────────
+  - type: web
+    name: reel-ai-service
+    runtime: docker
+    dockerfilePath: ./backend/ai-service/Dockerfile
+    dockerContext: ./backend/ai-service
+    plan: standard      # $25/mo — needs RAM for CLIP + Whisper models (2–3 GB)
+    healthCheckPath: /health
+    envVars:
+      - key: WHISPER_MODEL
+        value: base     # tiny=fastest/worst, base=good balance, small=better quality
+      - key: UPLOADS_DIR
+        value: /app/uploads
+      - key: OUTPUTS_DIR
+        value: /app/outputs
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: reel-redis
+          property: connectionString
+      - key: CELERY_BROKER_URL
+        fromService:
+          type: redis
+          name: reel-redis
+          property: connectionString
+      - key: CELERY_RESULT_BACKEND
+        fromService:
+          type: redis
+          name: reel-redis
+          property: connectionString
+      - key: STORAGE_TYPE
+        value: r2
+      - key: CLOUDFLARE_R2_ENDPOINT
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+    disk:
+      name: reel-outputs
+      mountPath: /app/outputs
+      sizeGB: 20
+    autoDeploy: true
+
+  # ── Celery Worker (CPU — analysis + light renders) ─────────────────
+  - type: worker
+    name: reel-celery-worker
+    runtime: docker
+    dockerfilePath: ./backend/ai-service/Dockerfile
+    dockerContext: ./backend/ai-service
+    plan: standard      # $25/mo
+    dockerCommand: celery -A workers.celery_app worker --concurrency=2 --loglevel=info -Q default,render
+    envVars:
+      - key: WHISPER_MODEL
+        value: base
+      - key: UPLOADS_DIR
+        value: /app/uploads
+      - key: OUTPUTS_DIR
+        value: /app/outputs
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: reel-redis
+          property: connectionString
+      - key: CELERY_BROKER_URL
+        fromService:
+          type: redis
+          name: reel-redis
+          property: connectionString
+      - key: CELERY_RESULT_BACKEND
+        fromService:
+          type: redis
+          name: reel-redis
+          property: connectionString
+      - key: STORAGE_TYPE
+        value: r2
+      - key: CLOUDFLARE_R2_ENDPOINT
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+    disk:
+      name: reel-worker-outputs
+      mountPath: /app/outputs
+      sizeGB: 20
+    autoDeploy: true

@@ -1,0 +1,136 @@
+version: "3.9"
+
+services:
+  # ── MongoDB ──────────────────────────────────────────────────────────────
+  mongo:
+    image: mongo:7
+    container_name: reel_mongo
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER:-reel}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASS:-reelpass}
+      MONGO_INITDB_DATABASE: reeldb
+    volumes:
+      - mongo_data:/data/db
+    ports:
+      - "27017:27017"
+    networks:
+      - reel_net
+
+  # ── Redis (Bull queue + cache) ────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: reel_redis
+    restart: unless-stopped
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    networks:
+      - reel_net
+
+  # ── Node.js API Gateway ───────────────────────────────────────────────────
+  gateway:
+    build:
+      context: ./backend/gateway
+      dockerfile: Dockerfile
+    container_name: reel_gateway
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      MONGO_URI: mongodb://${MONGO_USER:-reel}:${MONGO_PASS:-reelpass}@mongo:27017/reeldb?authSource=admin
+      REDIS_URL: redis://redis:6379
+    volumes:
+      - uploads:/app/uploads
+      - outputs:/app/outputs
+    ports:
+      - "4000:4000"
+    depends_on:
+      - mongo
+      - redis
+    networks:
+      - reel_net
+
+  # ── Python AI Microservice ─────────────────────────────────────────────────
+  ai-service:
+    build:
+      context: ./backend/ai-service
+      dockerfile: Dockerfile
+    container_name: reel_ai
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      REDIS_URL: redis://redis:6379
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      UPLOADS_DIR: /app/uploads
+      OUTPUTS_DIR: /app/outputs
+    volumes:
+      - uploads:/app/uploads
+      - outputs:/app/outputs
+      - model_cache:/root/.cache
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+    networks:
+      - reel_net
+    # Remove the deploy block if you have no GPU; CPU-only mode still works
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # ── Celery Worker (AI jobs) ───────────────────────────────────────────────
+  celery-worker:
+    build:
+      context: ./backend/ai-service
+      dockerfile: Dockerfile
+    container_name: reel_celery
+    restart: unless-stopped
+    command: celery -A workers.celery_app worker --concurrency=2 --loglevel=info -Q default,render
+    env_file: .env
+    environment:
+      REDIS_URL: redis://redis:6379
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      UPLOADS_DIR: /app/uploads
+      OUTPUTS_DIR: /app/outputs
+    volumes:
+      - uploads:/app/uploads
+      - outputs:/app/outputs
+      - model_cache:/root/.cache
+    depends_on:
+      - redis
+    networks:
+      - reel_net
+
+  # ── Next.js Frontend ──────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: reel_frontend
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_URL: http://gateway:4000
+      NEXT_PUBLIC_RAZORPAY_KEY: ${RAZORPAY_KEY_ID}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - gateway
+    networks:
+      - reel_net
+
+volumes:
+  mongo_data:
+  uploads:
+  outputs:
+  model_cache:
+
+networks:
+  reel_net:
+    driver: bridge
