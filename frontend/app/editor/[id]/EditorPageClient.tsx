@@ -179,7 +179,7 @@ export default function EditorPageClient() {
                       {(job.captions || []).length === 0 ? (
                         <p className="text-white/30 text-sm">No speech detected</p>
                       ) : (
-                        job.captions.slice(0, 8).map((c: any, i: number) => (
+                        (job.captions ?? []).slice(0, 8).map((c: any, i: number) => (
                           <div key={i} className="flex gap-3 text-sm">
                             <span className="text-white/30 tabular-nums shrink-0">
                               {fmtTime(c.start)}
