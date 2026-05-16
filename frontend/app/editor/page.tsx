@@ -50,7 +50,8 @@ function EditorInner() {
     try {
       await renderJob(jobId);
       toast.success("Rendering started!");
-      mutate();
+      // Optimistically flip to "rendering" immediately — don't wait for the next poll
+      mutate({ ...job, status: "rendering", stage: "Rendering queued", progress: 50 }, false);
     } catch (err: any) {
       toast.error(err?.response?.data?.error || "Render failed");
     } finally {
