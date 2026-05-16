@@ -1,0 +1,4 @@
+# Cloudflare Pages SPA fallback
+# If no static file exists for a path, serve index.html so Next.js
+# client-side routing can handle dynamic routes like /editor/[uuid].
+/*  /index.html  200

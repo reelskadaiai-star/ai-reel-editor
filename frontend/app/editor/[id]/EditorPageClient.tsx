@@ -1,17 +1,23 @@
-// Server component wrapper — required so generateStaticParams can coexist
-// with the "use client" EditorPageClient component.
-// Dynamic job IDs (UUIDs) are not known at build time; the Cloudflare Pages
-// _redirects fallback serves index.html for unknown /editor/* paths so the
-// Next.js client-side router can hydrate and render EditorPageClient.
-export function generateStaticParams() {
-  return [];
-}
+"use client";
+import { useState } from "react";
+import { useParams, useRouter } from "next/navigation";
+import { motion, AnimatePresence } from "framer-motion";
+import { ArrowLeft, Download, RefreshCw, Music, Wand2, Share2 } from "lucide-react";
+import toast from "react-hot-toast";
+import useSWR from "swr";
 
-export { default } from "./EditorPageClient";
+import AnalysisPanel from "@/components/editor/AnalysisPanel";
+import TemplateSelector from "@/components/editor/TemplateSelector";
+import AudioPicker from "@/components/editor/AudioPicker";
+import ReelPreview from "@/components/editor/ReelPreview";
+import ExportModal from "@/components/editor/ExportModal";
+import StatusTracker from "@/components/editor/StatusTracker";
+import { fetchJob, renderJob, updateJob } from "@/lib/api";
+import type { Job } from "@/lib/types";
 
 type EditorTab = "template" | "audio" | "captions";
 
-export default function EditorPage() {
+export default function EditorPageClient() {
   const { id: jobId } = useParams<{ id: string }>();
   const router = useRouter();
 
