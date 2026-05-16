@@ -118,10 +118,6 @@ router.get("/:jobId/download", optionalAuth, async (req, res) => {
   if (!job) return res.status(404).json({ error: "Not found" });
   if (!job.outputFile) return res.status(409).json({ error: "Not rendered yet" });
 
-  if (!job.paid) {
-    // Serve watermarked version
-    return res.redirect(`/outputs/${job.watermarkedFile}`);
-  }
   return res.redirect(`/outputs/${job.outputFile}`);
 });
 

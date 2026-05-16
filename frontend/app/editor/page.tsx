@@ -103,7 +103,7 @@ function EditorInner() {
           )}
           {isRendered && (
             <button onClick={() => setShowExport(true)} className="btn-primary flex items-center gap-2 text-sm py-2 px-4">
-              <Download className="w-4 h-4" /> Export ₹20
+              <Download className="w-4 h-4" /> Download
             </button>
           )}
         </div>
