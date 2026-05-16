@@ -93,6 +93,11 @@ router.post("/:jobId/render", optionalAuth, async (req, res) => {
     return res.json({ jobId, status: "already_rendered", outputFile: job.outputFile });
   }
 
+  // Guard against duplicate render requests (e.g. double-click)
+  if (job.status === "rendering") {
+    return res.json({ jobId, status: "rendering", message: "Already rendering" });
+  }
+
   // Apply any body overrides before rendering
   const overrides = req.body || {};
   if (Object.keys(overrides).length) {
