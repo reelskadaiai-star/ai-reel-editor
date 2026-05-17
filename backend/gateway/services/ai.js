@@ -54,6 +54,9 @@ async function startRender(jobId) {
         target_duration: job.targetDurationSec,
         include_hook: job.includeHookText,
         hook_text: job.hookText,
+        mute_audio: job.muteAudio || false,
+        logo_url: job.logoFile ? videoUrl(job.logoFile) : null,
+        logo_position: job.logoPosition || "bottom_right",
       },
       { timeout: 300_000 }
     );

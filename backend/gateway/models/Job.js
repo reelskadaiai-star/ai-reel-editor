@@ -63,6 +63,11 @@ const jobSchema = new mongoose.Schema(
     includeHookText: { type: Boolean, default: true },
     hookText: String,
 
+    // User branding
+    muteAudio: { type: Boolean, default: false },
+    logoFile: String,
+    logoPosition: { type: String, default: "bottom_right" }, // top_left | top_right | bottom_left | bottom_right
+
     // Output — filenames (on HF Space disk)
     outputFile: String,
     watermarkedFile: String,

@@ -55,6 +55,11 @@ export interface Job {
   watermarkedUrl?: string;
   thumbnailUrl?: string;
 
+  // Branding
+  muteAudio?: boolean;
+  logoFile?: string;
+  logoPosition?: "top_left" | "top_right" | "bottom_left" | "bottom_right";
+
   // Payment
   paid: boolean;
   paymentOrderId?: string;

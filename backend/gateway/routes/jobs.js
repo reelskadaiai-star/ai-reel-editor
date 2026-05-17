@@ -79,6 +79,7 @@ router.patch("/:jobId", optionalAuth, async (req, res) => {
     "template", "musicFile", "musicOffset", "aspectRatio",
     "captionStyle", "transitionStyle", "targetDurationSec",
     "includeHookText", "hookText",
+    "muteAudio", "logoFile", "logoPosition",
   ];
   const updates = {};
   allowed.forEach((k) => { if (req.body[k] !== undefined) updates[k] = req.body[k]; });

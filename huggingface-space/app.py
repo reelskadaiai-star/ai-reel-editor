@@ -71,6 +71,9 @@ class RenderRequest(BaseModel):
     target_duration: int = 30
     include_hook: bool = True
     hook_text: str | None = None
+    mute_audio: bool = False
+    logo_url: str | None = None
+    logo_position: str = "bottom_right"
 
 
 # ── Routes ────────────────────────────────────────────────────────────
@@ -97,7 +100,8 @@ def render(req: RenderRequest):
         target=_run_render,
         args=(task_id, req.job_id, req.video_url, req.template, req.music_url,
               req.music_offset, req.aspect_ratio, req.caption_style,
-              req.transition_style, req.target_duration, req.include_hook, req.hook_text),
+              req.transition_style, req.target_duration, req.include_hook, req.hook_text,
+              req.mute_audio, req.logo_url, req.logo_position),
         daemon=True,
     )
     t.start()
@@ -178,7 +182,8 @@ def _run_analyze(task_id: str, job_id: str, video_url: str):
 
 def _run_render(task_id, job_id, video_url, template, music_url,
                 music_offset, aspect_ratio, caption_style,
-                transition_style, target_duration, include_hook, hook_text):
+                transition_style, target_duration, include_hook, hook_text,
+                mute_audio=False, logo_url=None, logo_position="bottom_right"):
     try:
         _progress(task_id, 5, "Downloading video")
         video_path = str(_download_video(video_url, job_id))
@@ -202,6 +207,21 @@ def _run_render(task_id, job_id, video_url, template, music_url,
                         f.write(chunk)
             music_path = str(music_dest)
 
+        # Download logo if provided
+        logo_path = None
+        if logo_url:
+            logo_ext = Path(logo_url).suffix or ".png"
+            logo_dest = UPLOADS_DIR / f"{job_id}_logo{logo_ext}"
+            try:
+                with httpx.stream("GET", logo_url, timeout=30, follow_redirects=True) as r:
+                    r.raise_for_status()
+                    with open(logo_dest, "wb") as f:
+                        for chunk in r.iter_bytes(8192):
+                            f.write(chunk)
+                logo_path = str(logo_dest)
+            except Exception as e:
+                logger.warning(f"Logo download failed: {e}")
+
         _progress(task_id, 40, "Rendering reel")
         renderer = ReelRenderer(
             job_id=job_id,
@@ -220,6 +240,9 @@ def _run_render(task_id, job_id, video_url, template, music_url,
             include_hook=include_hook,
             hook_text=hook_text,
             output_dir=str(OUTPUTS_DIR),
+            mute_audio=mute_audio,
+            logo_file=logo_path,
+            logo_position=logo_position,
         )
 
         _progress(task_id, 50, "Cutting clips")

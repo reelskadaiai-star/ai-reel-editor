@@ -32,6 +32,18 @@ const upload = multer({
   },
 });
 
+// Separate multer instance for image uploads (logos)
+const imageUpload = multer({
+  storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
+  fileFilter: (req, file, cb) => {
+    const allowed = [".png", ".jpg", ".jpeg", ".webp", ".svg"];
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (allowed.includes(ext)) cb(null, true);
+    else cb(new Error("Unsupported image format. Allowed: png, jpg, jpeg, webp, svg"));
+  },
+});
+
 // POST /api/upload  — upload raw video and queue analysis
 router.post("/", optionalAuth, upload.single("video"), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: "No video file provided" });
@@ -72,6 +84,21 @@ router.post("/audio/:jobId", optionalAuth, upload.single("audio"), async (req, r
     res.json({ ok: true, musicFile: req.file.filename });
   } catch (err) {
     res.status(500).json({ error: "Failed to attach audio" });
+  }
+});
+
+// POST /api/upload/logo/:jobId — upload logo image for watermark overlay
+router.post("/logo/:jobId", optionalAuth, imageUpload.single("logo"), async (req, res) => {
+  const { jobId } = req.params;
+  const job = await Job.findOne({ jobId });
+  if (!job) return res.status(404).json({ error: "Job not found" });
+  if (!req.file) return res.status(400).json({ error: "No image file provided" });
+
+  try {
+    await Job.findOneAndUpdate({ jobId }, { logoFile: req.file.filename });
+    res.json({ ok: true, logoFile: req.file.filename });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to attach logo" });
   }
 });
 

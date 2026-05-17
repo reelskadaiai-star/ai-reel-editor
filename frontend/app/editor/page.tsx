@@ -11,12 +11,12 @@ import TemplateSelector from "@/components/editor/TemplateSelector";
 import AudioPicker from "@/components/editor/AudioPicker";
 import ReelPreview from "@/components/editor/ReelPreview";
 import StatusTracker from "@/components/editor/StatusTracker";
-import { fetchJob, renderJob, updateJob } from "@/lib/api";
+import api, { fetchJob, renderJob, updateJob } from "@/lib/api";
 import type { Job } from "@/lib/types";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 
-type EditorTab = "template" | "audio" | "captions";
+type EditorTab = "template" | "audio" | "captions" | "branding";
 
 function EditorInner() {
   const searchParams = useSearchParams();
@@ -46,9 +46,11 @@ function EditorInner() {
   async function handleRender() {
     if (!job || isRendering || isRendered) return;
 
-    // ── Optimistic update: flip to "rendering" in the SWR cache immediately ──
-    // This makes the StatusTracker appear on the FIRST click, before the server
-    // responds. SWR polling will then sync real progress from the server.
+    // Optimistic update — flip to "rendering" immediately so StatusTracker
+    // appears on the FIRST click without waiting for the next poll.
+    // We do NOT call mutate() after success — the 3-second polling interval
+    // will naturally sync the real server state, avoiding a 304 race that
+    // would revert the optimistic data back to "done".
     mutate(
       { ...job, status: "rendering", stage: "Rendering queued", progress: 50 },
       { revalidate: false }
@@ -56,7 +58,6 @@ function EditorInner() {
 
     try {
       await renderJob(jobId);
-      mutate(); // kick off a real re-fetch to sync server state
     } catch (err: any) {
       toast.error(err?.response?.data?.error || "Render failed");
       mutate(); // revert to real server state on error
@@ -65,6 +66,32 @@ function EditorInner() {
 
   async function handleTemplateChange(t: string) {
     await updateJob(jobId, { template: t });
+    mutate();
+  }
+
+  async function handleMuteToggle() {
+    if (!job) return;
+    await updateJob(jobId, { muteAudio: !job.muteAudio });
+    mutate();
+  }
+
+  async function handleLogoUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !jobId) return;
+    const fd = new FormData();
+    fd.append("logo", file);
+    try {
+      await api.post(`/api/upload/logo/${jobId}`, fd);
+      mutate();
+      toast.success("Logo uploaded!");
+    } catch {
+      toast.error("Logo upload failed");
+    }
+  }
+
+  async function handleLogoPosition(pos: string) {
+    if (!job) return;
+    await updateJob(jobId, { logoPosition: pos as Job["logoPosition"] });
     mutate();
   }
 
@@ -164,7 +191,7 @@ function EditorInner() {
             <div className="p-4 space-y-4">
               <AnalysisPanel job={job} />
               <div className="flex gap-1 glass rounded-xl p-1">
-                {(["template", "audio", "captions"] as EditorTab[]).map((tab) => (
+                {(["template", "audio", "captions", "branding"] as EditorTab[]).map((tab) => (
                   <button
                     key={tab}
                     onClick={() => setActiveTab(tab)}
@@ -201,6 +228,59 @@ function EditorInner() {
                           </div>
                         ))
                       )}
+                    </div>
+                  </motion.div>
+                )}
+
+                {activeTab === "branding" && (
+                  <motion.div key="branding" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-4">
+                    {/* Mute audio */}
+                    <div className="card flex items-center justify-between">
+                      <div>
+                        <p className="text-sm font-medium">Mute original audio</p>
+                        <p className="text-xs text-white/40 mt-0.5">Remove video sound — keep background music only</p>
+                      </div>
+                      <button
+                        onClick={handleMuteToggle}
+                        className={`relative w-11 h-6 rounded-full transition-colors ${job.muteAudio ? "bg-brand-500" : "bg-white/10"}`}
+                      >
+                        <span className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-all ${job.muteAudio ? "left-6" : "left-1"}`} />
+                      </button>
+                    </div>
+
+                    {/* Logo upload */}
+                    <div className="card space-y-3">
+                      <p className="text-sm font-medium">Logo / Watermark</p>
+                      <label className="flex items-center gap-3 cursor-pointer bg-white/5 hover:bg-white/10 transition-colors rounded-xl px-4 py-3">
+                        <span className="text-xs text-white/60">{job.logoFile ? "✓ Logo uploaded — upload again to replace" : "Upload PNG / JPG (transparent PNGs work best)"}</span>
+                        <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={handleLogoUpload} />
+                        <span className="ml-auto text-xs text-brand-400 font-medium shrink-0">Browse</span>
+                      </label>
+
+                      {/* Position selector */}
+                      <div>
+                        <p className="text-xs text-white/40 mb-2">Position</p>
+                        <div className="grid grid-cols-2 gap-2">
+                          {([
+                            { key: "top_left",     label: "↖ Top left" },
+                            { key: "top_right",    label: "↗ Top right" },
+                            { key: "bottom_left",  label: "↙ Bottom left" },
+                            { key: "bottom_right", label: "↘ Bottom right" },
+                          ] as { key: Job["logoPosition"]; label: string }[]).map(({ key, label }) => (
+                            <button
+                              key={key}
+                              onClick={() => handleLogoPosition(key!)}
+                              className={`py-2 px-3 rounded-lg text-xs font-medium border transition-all ${
+                                (job.logoPosition ?? "bottom_right") === key
+                                  ? "border-brand-500 bg-brand-500/15 text-brand-400"
+                                  : "border-white/10 text-white/50 hover:text-white"
+                              }`}
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
                     </div>
                   </motion.div>
                 )}

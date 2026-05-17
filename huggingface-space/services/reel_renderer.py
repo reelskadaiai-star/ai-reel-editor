@@ -59,6 +59,9 @@ class ReelRenderer:
         include_hook: bool,
         hook_text: str | None,
         output_dir: str,
+        mute_audio: bool = False,
+        logo_file: str | None = None,
+        logo_position: str = "bottom_right",
     ):
         self.job_id = job_id
         self.video_path = video_path
@@ -76,6 +79,9 @@ class ReelRenderer:
         self.include_hook = include_hook
         self.hook_text = hook_text
         self.output_dir = output_dir
+        self.mute_audio = mute_audio
+        self.logo_file = logo_file
+        self.logo_position = logo_position
 
     def render(self) -> str:
         """Main render pipeline. Returns path to final output file."""
@@ -101,11 +107,14 @@ class ReelRenderer:
         # 4. Overlay captions
         captioned_path = self._overlay_captions(graded_path)
 
-        # 5. Mix audio
-        final_path = self._mix_audio(captioned_path)
+        # 5. Overlay logo
+        logo_path = self._overlay_logo(captioned_path)
+
+        # 6. Mix audio
+        final_path = self._mix_audio(logo_path)
 
         # Cleanup temp files
-        for p in clip_paths + [concat_path, graded_path, captioned_path]:
+        for p in clip_paths + [concat_path, graded_path, captioned_path, logo_path]:
             if p != final_path and os.path.exists(p):
                 try:
                     os.remove(p)
@@ -306,10 +315,70 @@ class ReelRenderer:
             logger.warning(f"[Renderer] Caption overlay failed: {e}")
             return video_path
 
+    def _overlay_logo(self, video_path: str) -> str:
+        """Overlay user logo at the selected corner position."""
+        if not self.logo_file or not os.path.exists(self.logo_file):
+            return video_path  # no logo — pass through
+
+        out = str(Path(self.output_dir) / f"{self.job_id}_logo.mp4")
+
+        # Logo size: 15% of video width, keep aspect ratio
+        # Position map: corner → (x, y) in FFmpeg overlay syntax
+        positions = {
+            "top_left":     "20:20",
+            "top_right":    "W-w-20:20",
+            "bottom_left":  "20:H-h-20",
+            "bottom_right": "W-w-20:H-h-20",
+        }
+        pos = positions.get(self.logo_position, "W-w-20:H-h-20")
+
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", video_path,
+            "-i", self.logo_file,
+            "-filter_complex",
+            f"[1:v]scale=iw*0.15:-1[logo];[0:v][logo]overlay={pos}",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+            "-c:a", "copy",
+            out,
+        ]
+        try:
+            self._run(cmd)
+            return out
+        except Exception as e:
+            logger.warning(f"[Renderer] Logo overlay failed ({e}), skipping")
+            return video_path
+
     def _mix_audio(self, video_path: str) -> str:
         out = str(Path(self.output_dir) / f"{self.job_id}_final.mp4")
 
-        if self.music_file and os.path.exists(self.music_file):
+        has_music = self.music_file and os.path.exists(self.music_file)
+
+        if self.mute_audio and has_music:
+            # Muted original — music only
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", video_path,
+                "-ss", str(self.music_offset), "-i", self.music_file,
+                "-map", "0:v", "-map", "1:a",
+                "-c:v", "copy",
+                "-c:a", "aac", "-b:a", "192k",
+                "-shortest",
+                out,
+            ]
+        elif self.mute_audio:
+            # Muted original, no music — silent audio
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", video_path,
+                "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+                "-c:v", "copy",
+                "-c:a", "aac", "-b:a", "128k",
+                "-shortest",
+                out,
+            ]
+        elif has_music:
+            # Mix original (quiet) + music
             cmd = [
                 "ffmpeg", "-y",
                 "-i", video_path,
@@ -323,7 +392,7 @@ class ReelRenderer:
                 out,
             ]
         else:
-            # No music — re-encode to ensure consistent output format
+            # Original audio only
             cmd = [
                 "ffmpeg", "-y",
                 "-i", video_path,
@@ -335,8 +404,7 @@ class ReelRenderer:
         try:
             self._run(cmd)
         except Exception as e:
-            logger.warning(f"[Renderer] Audio mix failed ({e}), copying video-only")
-            # Fallback: copy video, add silent audio
+            logger.warning(f"[Renderer] Audio mix failed ({e}), using silent fallback")
             cmd_fallback = [
                 "ffmpeg", "-y",
                 "-i", video_path,
