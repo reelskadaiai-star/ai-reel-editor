@@ -65,6 +65,7 @@ async function startRender(jobId) {
         cta_text: job.ctaEnabled !== false ? (job.ctaText || "Follow for more 🔥") : null,
         speed_ramp: job.speedRamp || false,
         zoom_punch: job.zoomPunch !== false, // default true
+        edit_mode: job.editMode || "auto",
       },
       { timeout: 300_000 }
     );

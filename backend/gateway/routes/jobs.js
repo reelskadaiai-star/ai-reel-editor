@@ -85,7 +85,7 @@ router.patch("/:jobId", optionalAuth, async (req, res) => {
     "muteAudio", "logoFile", "logoPosition",
     "contentType", "contentTypeConfirmed",
     "ctaText", "ctaEnabled",
-    "speedRamp", "zoomPunch", "exportPreset",
+    "speedRamp", "zoomPunch", "exportPreset", "editMode",
   ];
   const updates = {};
   allowed.forEach((k) => { if (req.body[k] !== undefined) updates[k] = req.body[k]; });

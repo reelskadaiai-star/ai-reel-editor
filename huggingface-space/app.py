@@ -71,8 +71,9 @@ class RenderRequest(BaseModel):
     aspect_ratio: str = "9:16"
     caption_style: str = "modern"
     transition_style: str = "fade"
-    transition_duration: float = 0.3
-    target_duration: int = 30
+    transition_duration: float = 0.4
+    target_duration: int = 30       # frontend default — overridden by smart calc below
+    edit_mode: str = "auto"         # auto|short_reel|long_reel|cinematic|vlog|travel|wedding|fast_beat|food|business
     include_hook: bool = True
     hook_text: str | None = None
     mute_audio: bool = False
@@ -116,7 +117,7 @@ def render(req: RenderRequest):
             req.transition_style, req.transition_duration,
             req.target_duration, req.include_hook, req.hook_text,
             req.mute_audio, req.logo_url, req.logo_position,
-            req.cta_text, req.speed_ramp, req.zoom_punch,
+            req.cta_text, req.speed_ramp, req.zoom_punch, req.edit_mode,
         ),
         daemon=True,
     )
@@ -217,7 +218,8 @@ def _run_analyze(task_id: str, job_id: str, video_url: str, extra_video_urls: li
         beats = audio.detect_beats()
 
         _progress(task_id, 62, "Generating captions")
-        captions = CaptionGenerator().transcribe(video_path)
+        cap_gen = CaptionGenerator()
+        captions = cap_gen.transcribe(video_path, style="instagram")
         captions_auto = False
         if not captions:
             _progress(task_id, 70, "No speech — generating content captions")
@@ -265,7 +267,7 @@ def _run_render(
     transition_style, transition_duration,
     target_duration, include_hook, hook_text,
     mute_audio=False, logo_url=None, logo_position="bottom_right",
-    cta_text=None, speed_ramp=False, zoom_punch=True,
+    cta_text=None, speed_ramp=False, zoom_punch=True, edit_mode="auto",
 ):
     try:
         _progress(task_id, 5, f"Downloading {1 + len(extra_video_urls)} clip(s)")
@@ -285,10 +287,23 @@ def _run_render(
         detector = SceneDetector(video_path)
         scenes = detector.detect()
         duration = detector.duration
+
+        # ── Smart target duration override ──────────────────────────────
+        # The frontend always sends target_duration=30 (the Job model default).
+        # We ignore that and compute the RIGHT duration from actual footage length.
+        smart_dur = _compute_smart_duration(duration, edit_mode)
+        if target_duration <= 30 or target_duration < smart_dur * 0.3:
+            target_duration = smart_dur
+        logger.info(
+            f"[Render] footage={duration:.0f}s mode={edit_mode} "
+            f"→ target={target_duration}s"
+        )
+
         classifier = ContentClassifier()
         content_type, _, _ = classifier.classify(video_path, scenes)
         beats = AudioAnalyzer(video_path).detect_beats()
-        captions = CaptionGenerator().transcribe(video_path)
+        cap_gen = CaptionGenerator()
+        captions = cap_gen.transcribe(video_path, style=caption_style)
         if not captions:
             captions = _generate_content_captions(content_type, beats, duration)
             logger.info(f"[Render] Auto-generated {len(captions)} captions for {content_type}")
@@ -427,6 +442,41 @@ CTA_MAP = {
 def _suggest_template(ct): return TEMPLATE_MAP.get(ct, "generic_modern")
 def _generate_hook_options(ct): return HOOK_OPTIONS.get(ct, HOOK_OPTIONS["unknown"])
 def _generate_cta(ct): return CTA_MAP.get(ct, "Follow for more 🔥")
+
+
+def _compute_smart_duration(footage_seconds: float, edit_mode: str) -> int:
+    """
+    Compute the ideal output duration based on raw footage length + chosen edit mode.
+    THIS is what fixes the "always 30 seconds" bug — we ignore the frontend default
+    and compute a duration proportional to the actual footage.
+    """
+    s = footage_seconds
+    if edit_mode == "short_reel":
+        # Instagram Reel / TikTok — always 15–60s
+        return max(15, min(60, int(s * 0.5)))
+    if edit_mode == "fast_beat":
+        return max(30, min(90, int(s * 0.4)))
+    if edit_mode == "long_reel":
+        # Keep most of the footage
+        if s <= 120:   return int(s * 0.95)
+        if s <= 600:   return int(s * 0.85)
+        if s <= 1800:  return int(s * 0.75)
+        return min(int(s * 0.65), 2400)
+    if edit_mode in ("cinematic", "wedding", "emotional"):
+        if s <= 120:   return int(s * 0.90)
+        if s <= 600:   return int(s * 0.80)
+        return min(int(s * 0.70), 1800)
+    if edit_mode in ("travel", "vlog", "food", "business"):
+        if s <= 60:    return int(s * 0.95)
+        if s <= 300:   return int(s * 0.80)
+        if s <= 900:   return int(s * 0.70)
+        return min(int(s * 0.60), 1200)
+    # "auto" — smart proportional scaling
+    if s <= 30:    return int(s)              # keep all
+    if s <= 60:    return int(s * 0.95)       # ~57s from 60s
+    if s <= 300:   return int(s * 0.85)       # ~4m from 5m
+    if s <= 1200:  return int(s * 0.75)       # ~15m from 20m
+    return min(int(s * 0.65), 3600)           # cap at 1 hour
 
 
 # ── Auto-caption pools (shown when no speech detected) ────────────────

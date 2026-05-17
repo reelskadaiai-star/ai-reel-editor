@@ -23,6 +23,10 @@ export type TransitionStyle =
 
 export type ExportPreset = "reels" | "tiktok" | "shorts";
 
+export type EditMode =
+  | "auto" | "short_reel" | "long_reel" | "cinematic"
+  | "vlog" | "travel" | "wedding" | "fast_beat" | "food" | "business" | "emotional";
+
 export interface Job {
   _id: string;
   jobId: string;
@@ -66,6 +70,7 @@ export interface Job {
   speedRamp?: boolean;
   zoomPunch?: boolean;
   exportPreset?: ExportPreset;
+  editMode?: EditMode;
 
   // Output — filenames (on HF Space)
   outputFile?: string;

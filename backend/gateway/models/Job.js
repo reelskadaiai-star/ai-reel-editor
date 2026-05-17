@@ -75,6 +75,12 @@ const jobSchema = new mongoose.Schema(
     speedRamp: { type: Boolean, default: false }, // slow-mo on highlights
     zoomPunch: { type: Boolean, default: true },  // subtle zoom punch on beat drops
     exportPreset: { type: String, default: "reels" }, // reels | tiktok | shorts
+    editMode: {
+      type: String,
+      enum: ["auto", "short_reel", "long_reel", "cinematic", "vlog", "travel",
+             "wedding", "fast_beat", "food", "business", "emotional"],
+      default: "auto",
+    },
 
     // User branding
     muteAudio: { type: Boolean, default: false },

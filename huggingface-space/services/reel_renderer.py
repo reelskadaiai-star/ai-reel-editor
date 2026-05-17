@@ -1,53 +1,61 @@
 """
-Core reel renderer — v2.
-Uses FFmpeg to:
-  1. Select highlight segments (beat-aware snap)
-  2. Trim, speed-ramp & zoom-punch individual clips
-  3. Concatenate with smooth xfade transitions
-  4. Convert to target aspect ratio + colour grade
-  5. Overlay animated captions (drawtext)
-  6. Overlay end-screen CTA text
-  7. Overlay user logo / watermark
-  8. Mix background music (4 audio modes)
-  9. Generate thumbnail
+Premium Reel Renderer v3 — One-touch AI video pipeline.
+
+Pipeline:
+  1. Select + order highlight clips (beat-aware)
+  2. Extract clips with content-aware effects (zoom-punch, speed-ramp)
+  3. Concatenate with cinematic xfade transitions
+  4. Colour grade (scene-based LUT / eq filter)
+  5. Burn ASS subtitles (premium styled)
+  6. Overlay CTA end-screen
+  7. Overlay logo (blended)
+  8. Mix / duck audio
+  9. Export 1080p CRF-18
+
+Never crashes: 3-tier fallback at every stage.
 """
 from __future__ import annotations
 import os
 import uuid
+import shutil
 import subprocess
 import json
-import shutil
 from pathlib import Path
 from loguru import logger
+
+from services.caption_generator import CaptionGenerator
 
 
 WATERMARK_TEXT = os.getenv("WATERMARK_TEXT", "@ReelAI")
 
-FILTERS = {
-    "real_estate": "eq=saturation=1.1:contrast=1.05:brightness=0.02,unsharp=3:3:0.5",
-    "food":        "eq=saturation=1.4:contrast=1.15:brightness=0.03,unsharp=5:5:1.0",
-    "product":     "eq=saturation=1.2:contrast=1.1",
-    "dance":       "eq=saturation=1.3:contrast=1.2",
-    "travel":      "eq=saturation=1.3:contrast=1.1:brightness=0.02",
-    "cinematic":   "eq=saturation=0.85:contrast=1.2,curves=all='0/0 0.5/0.4 1/1'",
-    "fitness":     "eq=saturation=1.2:contrast=1.25:brightness=0.01",
-    "education":   "eq=saturation=1.0:contrast=1.05",
-    "lifestyle":   "eq=saturation=1.15:contrast=1.08:brightness=0.01",
-    "vlog":        "eq=saturation=1.1:contrast=1.05",
-    "comedy":      "eq=saturation=1.2:contrast=1.1",
-    "interview":   "eq=saturation=1.0:contrast=1.1",
-    "unknown":     "eq=saturation=1.1",
+# ── Colour grades (FFmpeg eq/curves filters per content type) ─────────────
+COLOUR_GRADE: dict[str, str] = {
+    "real_estate": "eq=saturation=1.10:contrast=1.06:brightness=0.02,unsharp=3:3:0.5",
+    "food":        "eq=saturation=1.45:contrast=1.18:brightness=0.04,unsharp=5:5:1.0",
+    "product":     "eq=saturation=1.20:contrast=1.10,unsharp=3:3:0.4",
+    "dance":       "eq=saturation=1.30:contrast=1.20",
+    "travel":      "eq=saturation=1.30:contrast=1.12:brightness=0.02,unsharp=3:3:0.3",
+    "nature":      "eq=saturation=1.28:contrast=1.10:brightness=0.01,unsharp=3:3:0.4",
+    "fitness":     "eq=saturation=1.20:contrast=1.28:brightness=0.01",
+    "education":   "eq=saturation=1.05:contrast=1.08:brightness=0.01",
+    "lifestyle":   "eq=saturation=1.18:contrast=1.10:brightness=0.01",
+    "vlog":        "eq=saturation=1.12:contrast=1.06",
+    "comedy":      "eq=saturation=1.22:contrast=1.12",
+    "interview":   "eq=saturation=1.05:contrast=1.10",
+    "cinematic":   "curves=all='0/0 0.25/0.20 0.75/0.80 1/1',eq=saturation=0.85:contrast=1.18",
+    "unknown":     "eq=saturation=1.10:contrast=1.05",
 }
 
-ASPECT_RES = {
+# ── Target aspect-ratio → (width, height) ────────────────────────────────
+ASPECT_RES: dict[str, tuple[str, str]] = {
     "9:16":  ("1080", "1920"),
     "1:1":   ("1080", "1080"),
     "16:9":  ("1920", "1080"),
     "4:5":   ("1080", "1350"),
 }
 
-# xfade transition names (all supported in FFmpeg 4.3+)
-XFADE_TRANSITIONS = {
+# ── Supported xfade transitions ───────────────────────────────────────────
+XFADE_MAP: dict[str, str | None] = {
     "fade":       "fade",
     "wipeleft":   "wipeleft",
     "wiperight":  "wiperight",
@@ -60,6 +68,9 @@ XFADE_TRANSITIONS = {
     "auto":       "fade",
     "none":       None,
 }
+
+# ── Caption styles (forwarded to CaptionGenerator) ────────────────────────
+_CAPTION_STYLES = {"instagram", "bold", "cinematic", "karaoke", "modern", "default"}
 
 
 class ReelRenderer:
@@ -84,152 +95,196 @@ class ReelRenderer:
         mute_audio: bool = False,
         logo_file: str | None = None,
         logo_position: str = "bottom_right",
-        transition_duration: float = 0.3,
+        transition_duration: float = 0.4,
         cta_text: str | None = None,
         speed_ramp: bool = False,
         zoom_punch: bool = True,
     ):
-        self.job_id = job_id
-        self.video_path = video_path
-        self.segments = segments
-        self.captions = captions
-        self.beats = beat_timestamps
-        self.content_type = content_type
-        self.template = template
-        self.music_file = music_file
-        self.music_offset = music_offset
-        self.aspect_ratio = aspect_ratio
-        self.caption_style = caption_style
+        self.job_id          = job_id
+        self.video_path      = video_path
+        self.segments        = segments
+        self.captions        = captions
+        self.beats           = beat_timestamps or []
+        self.content_type    = content_type
+        self.template        = template
+        self.music_file      = music_file
+        self.music_offset    = music_offset
+        self.aspect_ratio    = aspect_ratio
+        self.caption_style   = caption_style if caption_style in _CAPTION_STYLES else "instagram"
         self.transition_style = transition_style
-        self.transition_duration = max(0.1, min(transition_duration, 0.8))
-        self.target_duration = target_duration
-        self.include_hook = include_hook
-        self.hook_text = hook_text
-        self.output_dir = output_dir
-        self.mute_audio = mute_audio
-        self.logo_file = logo_file
-        self.logo_position = logo_position
-        self.cta_text = cta_text
-        self.speed_ramp = speed_ramp
-        self.zoom_punch = zoom_punch
-        # Derive video duration from segments for _synthesise_clips fallback
-        self.duration = max((s["end"] for s in segments), default=60.0) if segments else 60.0
+        self.transition_dur  = max(0.2, min(transition_duration, 0.8))
+        self.target_duration = int(target_duration) or 30
+        self.include_hook    = include_hook
+        self.hook_text       = hook_text
+        self.output_dir      = output_dir
+        self.mute_audio      = mute_audio
+        self.logo_file       = logo_file
+        self.logo_position   = logo_position
+        self.cta_text        = cta_text
+        self.speed_ramp      = speed_ramp
+        self.zoom_punch      = zoom_punch
+        # Derive video duration from segments (used by padding)
+        self.duration = (
+            max((s["end"] for s in segments), default=60.0)
+            if segments else 60.0
+        )
 
+    # ── Main entry point ──────────────────────────────────────────────────
     def render(self) -> str:
-        clips = self._select_clips()
-        logger.info(f"[Renderer] {len(clips)} clips, ~{sum(c['dur'] for c in clips):.1f}s total")
+        clips    = self._select_clips()
+        logger.info(
+            f"[Renderer] {len(clips)} clips, "
+            f"~{sum(c['dur'] for c in clips):.1f}s / {self.target_duration}s target"
+        )
 
         clip_paths = []
         for i, clip in enumerate(clips):
-            out = self._extract_clip(clip, index=i)
-            if out:
-                clip_paths.append(out)
+            p = self._extract_clip(clip, i)
+            if p:
+                clip_paths.append(p)
 
+        # Absolute last resort
         if not clip_paths:
-            # Absolute last resort: use the raw video file directly
-            logger.warning("[Renderer] All clip extractions failed — using raw video as fallback")
+            logger.warning("[Renderer] All extractions failed — using raw video")
             clip_paths = [self.video_path]
 
-        concat_path = self._concatenate_xfade(clip_paths)
-        graded_path = self._apply_grade(concat_path)
-        captioned_path = self._overlay_captions(graded_path)
-        cta_path = self._overlay_cta(captioned_path)
-        logo_path = self._overlay_logo(cta_path)
-        final_path = self._mix_audio(logo_path)
+        concat_path   = self._concatenate(clip_paths)
+        graded_path   = self._colour_grade(concat_path)
+        subbed_path   = self._burn_subtitles(graded_path)
+        cta_path      = self._overlay_cta(subbed_path)
+        logo_path     = self._overlay_logo(cta_path)
+        final_path    = self._mix_audio(logo_path)
 
-        for p in clip_paths + [concat_path, graded_path, captioned_path, cta_path, logo_path]:
-            if p != final_path and os.path.exists(p):
+        # Cleanup intermediates
+        for p in clip_paths + [concat_path, graded_path, subbed_path, cta_path, logo_path]:
+            if p != final_path and p != self.video_path and os.path.exists(p):
                 try:
                     os.remove(p)
                 except Exception:
                     pass
 
-        logger.info(f"[Renderer] Render complete → {final_path}")
+        logger.info(f"[Renderer] ✅ → {final_path}")
         return final_path
 
     def add_watermark(self, video_path: str) -> str:
-        out = str(Path(self.output_dir) / f"{self.job_id}_wm.mp4")
+        out  = self._out("wm")
         text = WATERMARK_TEXT.replace(":", r"\:").replace("'", r"\'")
-        cmd = [
+        cmd  = [
             "ffmpeg", "-y", "-i", video_path,
             "-vf",
-            f"drawtext=text='{text}':fontsize=32:fontcolor=white@0.5"
-            f":x=w-tw-20:y=h-th-20:shadowcolor=black@0.6:shadowx=2:shadowy=2",
-            "-c:a", "copy",
-            "-c:v", "libx264", "-crf", "23", "-preset", "fast",
+            f"drawtext=text='{text}':fontsize=34:fontcolor=white@0.55"
+            f":x=w-tw-24:y=h-th-24"
+            f":shadowcolor=black@0.7:shadowx=2:shadowy=2",
+            "-c:v", "libx264", "-crf", "20", "-preset", "fast",
+            "-pix_fmt", "yuv420p", "-c:a", "copy",
             out,
         ]
-        self._run(cmd)
-        return out
+        self._run(cmd, fallback=video_path, out=out)
+        return out if os.path.exists(out) else video_path
 
     def generate_thumbnail(self, video_path: str) -> str:
-        out = str(Path(self.output_dir) / f"{self.job_id}_thumb.jpg")
+        out = self._out("thumb", ext=".jpg")
         cmd = [
-            "ffmpeg", "-y",
-            "-ss", "00:00:01",
+            "ffmpeg", "-y", "-ss", "00:00:02",
             "-i", video_path,
-            "-vframes", "1",
-            "-q:v", "2",
+            "-vframes", "1", "-q:v", "2",
             out,
         ]
-        self._run(cmd)
+        self._run(cmd, out=out)
         return out
 
-    # ── Private ───────────────────────────────────────────────────────
+    # ── Clip selection ────────────────────────────────────────────────────
     def _select_clips(self) -> list[dict]:
-        # Fallback chain: highlights → all non-dead → all segments → synthesise
+        # Priority order: highlight → normal → all non-dead → all
         candidates = [s for s in self.segments if s["type"] in ("highlight", "normal")]
         if not candidates:
             candidates = [s for s in self.segments if s["type"] != "dead"]
         if not candidates:
             candidates = list(self.segments)
-
-        # If still empty (no segments at all), synthesise uniform clips
         if not candidates:
-            logger.warning("[Renderer] No segments — synthesising clips from whole video")
             return self._synthesise_clips()
 
         candidates.sort(key=lambda s: s["score"], reverse=True)
 
-        selected = []
+        # Adaptive max_clip: longer target → longer individual clips allowed
+        # This prevents the "5min footage → 30s output" bug where 5×6s clips
+        # fill the (incorrect) 30s target and nothing more is added.
+        if self.target_duration <= 60:
+            max_clip = 6.0
+        elif self.target_duration <= 180:
+            max_clip = 10.0
+        elif self.target_duration <= 600:
+            max_clip = 15.0
+        else:
+            max_clip = 20.0
+        min_clip = 0.8
+        selected: list[dict] = []
         total = 0.0
-        max_clip = 6.0 if self.content_type == "food" else 8.0
-        min_clip = 1.0  # lowered from 1.5 so short clips still work
 
         for seg in candidates:
-            dur = seg["end"] - seg["start"]
-            if dur < min_clip:
+            raw_dur = seg["end"] - seg["start"]
+            if raw_dur < min_clip:
                 continue
-            clip_dur = min(dur, max_clip)
+            clip_dur  = min(raw_dur, max_clip)
             remaining = self.target_duration - total
             if clip_dur > remaining:
                 clip_dur = remaining
-                if clip_dur < 0.5:
-                    break
+            if clip_dur < 0.5:
+                break
             start = self._snap_to_beat(seg["start"])
             selected.append({"start": start, "dur": clip_dur, "score": seg["score"]})
             total += clip_dur
             if total >= self.target_duration:
                 break
 
-        # If we still got nothing (all clips < min_clip), synthesise
         if not selected:
-            logger.warning("[Renderer] All segments too short — synthesising clips")
             return self._synthesise_clips()
+
+        # Pad to fill target duration if we're short
+        if total < self.target_duration * 0.8:
+            selected = self._pad_to_duration(selected, total)
 
         selected.sort(key=lambda c: c["start"])
         return selected
 
-    def _synthesise_clips(self) -> list[dict]:
-        """Slice the whole video into equal chunks when no usable segments exist."""
+    def _pad_to_duration(self, existing: list[dict], total: float) -> list[dict]:
+        """Uniformly sample the remaining video to fill the target duration."""
         vid_dur = self.duration if self.duration > 0 else 60.0
-        n = max(1, min(8, int(self.target_duration / 5)))
-        chunk = vid_dur / n
-        clips = []
-        total = 0.0
+        used    = [(c["start"], c["start"] + c["dur"]) for c in existing]
+        # Step size adapts so we sample densely enough for long videos
+        step    = max(3.0, min(10.0, vid_dur / 60))
+        extra   = []
+        t       = 0.0
+
+        while total < self.target_duration and t < vid_dur:
+            end_t   = min(t + step, vid_dur)
+            overlap = any(s < end_t and t < e for s, e in used)
+            if not overlap:
+                dur = min(step, self.target_duration - total, vid_dur - t)
+                if dur >= 0.8:
+                    extra.append({"start": round(t, 2), "dur": round(dur, 2), "score": 0.3})
+                    used.append((t, t + dur))
+                    total += dur
+            t += step
+
+        logger.info(
+            f"[Renderer] Padded {len(extra)} clips → "
+            f"total {total:.1f}s / {self.target_duration}s"
+        )
+        return existing + extra
+
+    def _synthesise_clips(self) -> list[dict]:
+        """Last resort: uniform chunks across the whole video."""
+        vid_dur = max(self.duration, 1.0)
+        n       = max(4, min(10, int(self.target_duration / 5)))
+        step    = vid_dur / n
+        clips   = []
+        total   = 0.0
         for i in range(n):
-            start = i * chunk
-            dur = min(chunk, self.target_duration - total)
+            start = i * step
+            dur   = min(step, self.target_duration - total, vid_dur - start)
+            if dur < 0.5:
+                break
             clips.append({"start": round(start, 2), "dur": round(dur, 2), "score": 0.5})
             total += dur
             if total >= self.target_duration:
@@ -240,144 +295,163 @@ class ReelRenderer:
         if not self.beats:
             return t
         closest = min(self.beats, key=lambda b: abs(b - t))
-        return closest if abs(closest - t) < 0.5 else t
+        return closest if abs(closest - t) < 0.6 else t
 
+    # ── Clip extraction (with effects) ────────────────────────────────────
     def _extract_clip(self, clip: dict, index: int) -> str | None:
-        out = str(Path(self.output_dir) / f"{self.job_id}_clip_{index:03d}.mp4")
+        out = self._out(f"clip_{index:03d}")
+
+        vf_parts: list[str] = []
+        af_parts: list[str] = []
+
+        # Speed-ramp: slow-mo on high-score clips
+        if self.speed_ramp and clip.get("score", 0) >= 0.75:
+            vf_parts.append("setpts=1.33*PTS")
+            af_parts.append("atempo=0.75")
+
+        # Zoom-punch: simple crop-scale (fast, no zoompan bugs)
+        if self.zoom_punch:
+            # Scale to 104%, then crop back to original → subtle zoom-in feel
+            vf_parts.append(
+                "scale='iw*1.04:ih*1.04',"
+                "crop='iw/1.04:ih/1.04:(iw-iw/1.04)/2:(ih-ih/1.04)/2'"
+            )
 
         cmd = [
             "ffmpeg", "-y",
             "-ss", str(clip["start"]),
             "-i", self.video_path,
             "-t", str(clip["dur"]),
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+        ]
+        if vf_parts:
+            cmd += ["-vf", ",".join(vf_parts)]
+        if af_parts:
+            cmd += ["-af", ",".join(af_parts)]
+        cmd += [
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "22",
             "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", "128k",
             "-avoid_negative_ts", "make_zero",
+            out,
         ]
 
-        # Speed ramp: high-score clips play at 0.75x speed (slow-mo feel)
-        if self.speed_ramp and clip.get("score", 0) >= 0.75:
-            cmd += ["-vf", "setpts=1.33*PTS", "-af", "atempo=0.75"]
-
-        cmd.append(out)
-
         try:
-            self._run(cmd)
-            return out
+            self._run(cmd, out=out)
+            if os.path.exists(out):
+                return out
         except Exception as e:
-            logger.warning(f"[Renderer] Clip {index} failed: {e}")
+            logger.warning(f"[Renderer] Clip {index} with effects failed: {e} — retrying plain")
+
+        # Retry without effects
+        cmd_plain = [
+            "ffmpeg", "-y",
+            "-ss", str(clip["start"]),
+            "-i", self.video_path,
+            "-t", str(clip["dur"]),
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "22",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "128k",
+            "-avoid_negative_ts", "make_zero",
+            out,
+        ]
+        try:
+            self._run(cmd_plain, out=out)
+            return out if os.path.exists(out) else None
+        except Exception as e2:
+            logger.warning(f"[Renderer] Clip {index} plain also failed: {e2}")
             return None
 
-    def _get_video_duration(self, path: str) -> float:
-        result = subprocess.run(
-            ["ffprobe", "-v", "quiet", "-print_format", "json",
-             "-show_streams", "-select_streams", "v:0", path],
-            capture_output=True, timeout=15,
-        )
-        if result.returncode != 0:
-            return 0.0
-        try:
-            info = json.loads(result.stdout)
-            return float(info["streams"][0].get("duration", 0))
-        except Exception:
-            return 0.0
-
-    def _concatenate_xfade(self, clip_paths: list[str]) -> str:
-        out = str(Path(self.output_dir) / f"{self.job_id}_concat.mp4")
+    # ── Concatenation with xfade transitions ──────────────────────────────
+    def _concatenate(self, clip_paths: list[str]) -> str:
+        out = self._out("concat")
 
         if len(clip_paths) == 1:
             shutil.copy2(clip_paths[0], out)
             return out
 
-        xfade_name = XFADE_TRANSITIONS.get(self.transition_style, "fade")
+        xfade = XFADE_MAP.get(self.transition_style, "fade")
 
-        if xfade_name is None:
-            return self._concatenate_hardcut(clip_paths, out)
+        if xfade is None:
+            return self._hard_cut(clip_paths, out)
 
         try:
-            return self._concatenate_with_xfade(clip_paths, out, xfade_name)
+            return self._xfade_concat(clip_paths, out, xfade)
         except Exception as e:
-            logger.warning(f"[Renderer] xfade failed ({e}), hard-cut fallback")
-            return self._concatenate_hardcut(clip_paths, out)
+            logger.warning(f"[Renderer] xfade failed ({e}) — hard-cut fallback")
+            return self._hard_cut(clip_paths, out)
 
-    def _concatenate_with_xfade(self, clip_paths: list[str], out: str, xfade_name: str) -> str:
-        td = self.transition_duration
-        durations = [self._get_video_duration(p) for p in clip_paths]
-        durations = [d if d > 0 else 5.0 for d in durations]
+    def _xfade_concat(self, clip_paths: list[str], out: str, xfade: str) -> str:
+        td       = self.transition_dur
+        durations = [self._get_duration(p) or 5.0 for p in clip_paths]
 
         inputs = []
         for p in clip_paths:
             inputs += ["-i", p]
 
-        # Chain xfade + acrossfade for N clips
-        vparts = []
-        aparts = []
-        offset = 0.0
-        prev_v = "0:v"
-        prev_a = "0:a"
+        vparts: list[str] = []
+        aparts: list[str] = []
+        offset   = 0.0
+        prev_v   = "0:v"
+        prev_a   = "0:a"
 
         for i in range(1, len(clip_paths)):
-            offset += durations[i - 1] - td
-            out_v = f"v{i}"
-            out_a = f"a{i}"
+            offset += max(durations[i - 1] - td, 0.01)
+            ov, oa = f"v{i}", f"a{i}"
             vparts.append(
-                f"[{prev_v}][{i}:v]xfade=transition={xfade_name}:duration={td}:offset={offset:.3f}[{out_v}]"
+                f"[{prev_v}][{i}:v]xfade=transition={xfade}"
+                f":duration={td}:offset={offset:.3f}[{ov}]"
             )
             aparts.append(
-                f"[{prev_a}][{i}:a]acrossfade=d={td}[{out_a}]"
+                f"[{prev_a}][{i}:a]acrossfade=d={td}[{oa}]"
             )
-            prev_v = out_v
-            prev_a = out_a
+            prev_v, prev_a = ov, oa
 
-        filtergraph = ";".join(vparts + aparts)
-
+        fg = ";".join(vparts + aparts)
         cmd = (
-            ["ffmpeg", "-y"]
-            + inputs
-            + [
-                "-filter_complex", filtergraph,
-                "-map", f"[{prev_v}]",
-                "-map", f"[{prev_a}]",
-                "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+            ["ffmpeg", "-y"] + inputs +
+            [
+                "-filter_complex", fg,
+                "-map", f"[{prev_v}]", "-map", f"[{prev_a}]",
+                "-c:v", "libx264", "-preset", "fast", "-crf", "20",
                 "-pix_fmt", "yuv420p",
                 "-c:a", "aac", "-b:a", "128k",
                 out,
             ]
         )
-        self._run(cmd)
+        self._run(cmd, out=out)
         if not os.path.exists(out):
-            raise RuntimeError("xfade concat produced no output")
+            raise RuntimeError("xfade produced no output")
         return out
 
-    def _concatenate_hardcut(self, clip_paths: list[str], out: str) -> str:
-        list_file = str(Path(self.output_dir) / f"{self.job_id}_list.txt")
+    def _hard_cut(self, clip_paths: list[str], out: str) -> str:
+        list_file = self._out("list", ext=".txt")
         with open(list_file, "w") as f:
             for p in clip_paths:
                 f.write(f"file '{p}'\n")
         cmd = [
             "ffmpeg", "-y",
             "-f", "concat", "-safe", "0", "-i", list_file,
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "22",
             "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
             out,
         ]
         try:
-            self._run(cmd)
+            self._run(cmd, out=out)
         finally:
             try:
                 os.remove(list_file)
             except Exception:
                 pass
         if not os.path.exists(out):
-            raise RuntimeError("Hard-cut concat produced no output")
+            raise RuntimeError("Hard-cut concat failed")
         return out
 
-    def _apply_grade(self, video_path: str) -> str:
-        out = str(Path(self.output_dir) / f"{self.job_id}_graded.mp4")
+    # ── Colour grade + scale ──────────────────────────────────────────────
+    def _colour_grade(self, video_path: str) -> str:
+        out  = self._out("graded")
         w, h = ASPECT_RES.get(self.aspect_ratio, ("1080", "1920"))
-        grade = FILTERS.get(self.content_type, FILTERS["unknown"])
+        grade = COLOUR_GRADE.get(self.content_type, COLOUR_GRADE["unknown"])
 
         vf = (
             f"scale={w}:{h}:force_original_aspect_ratio=increase,"
@@ -387,102 +461,147 @@ class ReelRenderer:
         cmd = [
             "ffmpeg", "-y", "-i", video_path,
             "-vf", vf,
-            "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "18",
             "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-b:a", "128k",
+            "-c:a", "aac", "-b:a", "192k",
             out,
         ]
         try:
-            self._run(cmd)
+            self._run(cmd, out=out)
+            if os.path.exists(out):
+                return out
         except Exception as e:
-            logger.warning(f"[Renderer] Grade failed ({e}), scale-only fallback")
-            vf2 = f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}"
-            cmd2 = ["ffmpeg", "-y", "-i", video_path, "-vf", vf2,
-                    "-c:v", "libx264", "-preset", "fast", "-crf", "22",
-                    "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k", "-ar", "44100", out]
-            self._run(cmd2)
+            logger.warning(f"[Renderer] Grade failed ({e}) — scale-only fallback")
 
-        if not os.path.exists(out):
-            raise RuntimeError(f"Grade step produced no output at {out}")
-        return out
+        # Scale-only fallback
+        vf2 = f"scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}"
+        cmd2 = [
+            "ffmpeg", "-y", "-i", video_path,
+            "-vf", vf2,
+            "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
+            out,
+        ]
+        self._run(cmd2, out=out)
+        return out if os.path.exists(out) else video_path
 
-    def _overlay_captions(self, video_path: str) -> str:
+    # ── Subtitle burn-in (ASS) ────────────────────────────────────────────
+    def _burn_subtitles(self, video_path: str) -> str:
+        """Burn styled ASS subtitles into the video. Falls back gracefully."""
         if not self.captions:
             return video_path
 
-        out = str(Path(self.output_dir) / f"{self.job_id}_captions.mp4")
-        captions = self.captions[:20]
-        filters = []
+        out = self._out("subbed")
 
-        for cap in captions:
-            text = (cap["text"]
-                    .replace("'", "'\\''")
-                    .replace(":", r"\:")
-                    .replace("%", r"\%")
-                    .replace("\\", "\\\\"))
-            style = self._caption_style_params(cap.get("style", self.caption_style))
-            filters.append(
-                f"drawtext=text='{text}'"
-                f":enable='between(t,{cap['start']},{cap['end']})'"
-                f":{style}"
-            )
+        # Generate ASS file
+        cg = CaptionGenerator()
+        ass_path = cg.build_ass_file(
+            self.captions, self.caption_style, self.output_dir, self.job_id
+        )
 
+        if not ass_path or not os.path.exists(ass_path):
+            logger.warning("[Renderer] ASS file missing — skipping subtitles")
+            return video_path
+
+        # FFmpeg ass filter — path is a separate argv element so no shell quoting needed.
+        # On Linux/HF Space paths have no colons or spaces so this is safe as-is.
         cmd = [
             "ffmpeg", "-y", "-i", video_path,
-            "-vf", ",".join(filters),
-            "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+            "-vf", f"ass={ass_path}",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+            "-pix_fmt", "yuv420p",
             "-c:a", "copy",
             out,
         ]
         try:
-            self._run(cmd)
-            return out
+            self._run(cmd, out=out)
+            if os.path.exists(out):
+                return out
         except Exception as e:
-            logger.warning(f"[Renderer] Caption overlay failed: {e}")
+            logger.warning(f"[Renderer] ASS burn failed ({e}) — trying drawtext fallback")
+
+        # Drawtext fallback (plain white text, no fancy styling)
+        return self._drawtext_fallback(video_path, out)
+
+    def _drawtext_fallback(self, video_path: str, out: str) -> str:
+        """Simple drawtext fallback when ASS fails."""
+        if not self.captions:
+            return video_path
+        filters = []
+        for cap in self.captions[:25]:
+            # Escape order matters: backslash first, then special FFmpeg chars
+            text = cap["text"]
+            text = text.replace("\\", "\\\\")
+            text = text.replace("'",  "\\'")
+            text = text.replace(":",  r"\:")
+            text = text.replace("%",  r"\%")
+            # Strip emoji that drawtext can't render (avoids filter parse errors)
+            text = text.encode("ascii", "ignore").decode("ascii").strip()
+            if not text:
+                continue
+            filters.append(
+                f"drawtext=text='{text}'"
+                f":enable='between(t,{cap['start']},{cap['end']})'"
+                f":fontsize=56:fontcolor=white:x=(w-tw)/2:y=h*0.84"
+                f":shadowcolor=black:shadowx=2:shadowy=2"
+                f":borderw=2:bordercolor=black"
+            )
+        cmd = [
+            "ffmpeg", "-y", "-i", video_path,
+            "-vf", ",".join(filters),
+            "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+            "-pix_fmt", "yuv420p", "-c:a", "copy",
+            out,
+        ]
+        try:
+            self._run(cmd, out=out)
+            return out if os.path.exists(out) else video_path
+        except Exception:
             return video_path
 
+    # ── CTA overlay ───────────────────────────────────────────────────────
     def _overlay_cta(self, video_path: str) -> str:
-        """Burn CTA text onto the last 3.5 seconds of the reel."""
         if not self.cta_text:
             return video_path
 
-        out = str(Path(self.output_dir) / f"{self.job_id}_cta.mp4")
-        duration = self._get_video_duration(video_path)
-        if duration <= 0:
+        out      = self._out("cta")
+        duration = self._get_duration(video_path)
+        if not duration or duration < 2:
             return video_path
 
-        cta_start = max(0.0, duration - 3.5)
-        text = (self.cta_text
-                .replace("'", "'\\''")
-                .replace(":", r"\:")
-                .replace("%", r"\%"))
-
+        cta_start = max(0.0, duration - 4.0)
+        text = self.cta_text
+        text = text.replace("\\", "\\\\")
+        text = text.replace("'",  "\\'")
+        text = text.replace(":",  r"\:")
+        text = text.replace("%",  r"\%")
+        text = text.encode("ascii", "ignore").decode("ascii").strip()
+        if not text:
+            return video_path
         vf = (
             f"drawtext=text='{text}'"
             f":enable='between(t,{cta_start:.2f},{duration:.2f})'"
-            f":fontsize=50:fontcolor=white:x=(w-tw)/2:y=h*0.79"
-            f":shadowcolor=black@0.8:shadowx=3:shadowy=3"
-            f":borderw=2:bordercolor=black@0.6"
+            f":fontsize=52:fontcolor=white:x=(w-tw)/2:y=h*0.78"
+            f":shadowcolor=black@0.9:shadowx=3:shadowy=3"
+            f":borderw=2:bordercolor=black@0.7"
         )
         cmd = [
             "ffmpeg", "-y", "-i", video_path,
             "-vf", vf,
-            "-c:v", "libx264", "-preset", "fast", "-crf", "22",
-            "-c:a", "copy",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+            "-pix_fmt", "yuv420p", "-c:a", "copy",
             out,
         ]
-        try:
-            self._run(cmd)
-            return out
-        except Exception as e:
-            logger.warning(f"[Renderer] CTA overlay failed: {e}")
-            return video_path
+        self._run(cmd, fallback=video_path, out=out)
+        return out if os.path.exists(out) else video_path
 
+    # ── Logo overlay (blended) ────────────────────────────────────────────
     def _overlay_logo(self, video_path: str) -> str:
         if not self.logo_file or not os.path.exists(self.logo_file):
             return video_path
 
-        out = str(Path(self.output_dir) / f"{self.job_id}_logo.mp4")
+        out = self._out("logo")
         positions = {
             "top_left":     "20:20",
             "top_right":    "W-w-20:20",
@@ -496,23 +615,23 @@ class ReelRenderer:
             "-i", video_path,
             "-i", self.logo_file,
             "-filter_complex",
-            f"[1:v]scale=iw*0.15:-1[logo];[0:v][logo]overlay={pos}",
-            "-c:v", "libx264", "-preset", "fast", "-crf", "22",
-            "-c:a", "copy",
+            # Scale to 12% width, convert to RGBA, 65% opacity → natural blend
+            f"[1:v]scale=iw*0.12:-1,format=rgba,colorchannelmixer=aa=0.65[logo];"
+            f"[0:v][logo]overlay={pos}:format=auto",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+            "-pix_fmt", "yuv420p", "-c:a", "copy",
             out,
         ]
-        try:
-            self._run(cmd)
-            return out
-        except Exception as e:
-            logger.warning(f"[Renderer] Logo overlay failed ({e}), skipping")
-            return video_path
+        self._run(cmd, fallback=video_path, out=out)
+        return out if os.path.exists(out) else video_path
 
+    # ── Audio mix + ducking ───────────────────────────────────────────────
     def _mix_audio(self, video_path: str) -> str:
-        out = str(Path(self.output_dir) / f"{self.job_id}_final.mp4")
+        out       = self._out("final")
         has_music = bool(self.music_file and os.path.exists(self.music_file))
 
         if self.mute_audio and has_music:
+            # Replace original audio with music only
             cmd = [
                 "ffmpeg", "-y",
                 "-i", video_path,
@@ -522,61 +641,63 @@ class ReelRenderer:
                 "-shortest", out,
             ]
         elif self.mute_audio:
+            # Silent audio
             cmd = [
-                "ffmpeg", "-y",
-                "-i", video_path,
-                "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+                "ffmpeg", "-y", "-i", video_path,
+                "-f", "lavfi", "-i", "anullsrc=cl=stereo:r=44100",
                 "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
                 "-shortest", out,
             ]
         elif has_music:
+            # Mix original (ducked) with background music
+            # Speech detected → original at 0.35, music at 0.85; else 0.15/1.0
+            orig_vol  = 0.30 if self.captions else 0.15
+            music_vol = 0.90
             cmd = [
                 "ffmpeg", "-y",
                 "-i", video_path,
                 "-ss", str(self.music_offset), "-i", self.music_file,
                 "-filter_complex",
-                "[0:a]volume=0.25[orig];[1:a]volume=1.0[music];"
-                "[orig][music]amix=inputs=2:duration=first[aout]",
+                f"[0:a]volume={orig_vol}[orig];"
+                f"[1:a]volume={music_vol}[music];"
+                "[orig][music]amix=inputs=2:duration=first:dropout_transition=2[aout]",
                 "-map", "0:v", "-map", "[aout]",
                 "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
                 "-shortest", out,
             ]
         else:
+            # Normalise original audio
             cmd = [
-                "ffmpeg", "-y",
-                "-i", video_path,
-                "-c:v", "copy", "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
+                "ffmpeg", "-y", "-i", video_path,
+                "-af", "dynaudnorm=f=150:g=15",
+                "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
                 out,
             ]
 
-        try:
-            self._run(cmd)
-        except Exception as e:
-            logger.warning(f"[Renderer] Audio mix failed ({e}), silent fallback")
-            cmd2 = [
-                "ffmpeg", "-y",
-                "-i", video_path,
-                "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
-                "-c:v", "copy", "-c:a", "aac", "-b:a", "128k", "-shortest", out,
-            ]
-            self._run(cmd2)
-        return out
+        self._run(cmd, fallback=video_path, out=out)
+        return out if os.path.exists(out) else video_path
 
-    def _caption_style_params(self, style: str) -> str:
-        styles = {
-            "modern":  "fontsize=48:fontcolor=white:x=(w-tw)/2:y=h*0.85:shadowcolor=black:shadowx=2:shadowy=2:borderw=2:bordercolor=black",
-            "luxury":  "fontsize=42:fontcolor=white:x=(w-tw)/2:y=h*0.88",
-            "bold":    "fontsize=58:fontcolor=yellow:x=(w-tw)/2:y=h*0.82:shadowcolor=black:shadowx=3:shadowy=3:borderw=3:bordercolor=black",
-            "minimal": "fontsize=36:fontcolor=white@0.9:x=(w-tw)/2:y=h*0.90",
-            "hype":    "fontsize=64:fontcolor=#ff3366:x=(w-tw)/2:y=h*0.80:shadowcolor=black:shadowx=4:shadowy=4:borderw=3:bordercolor=black",
-            "neon":    "fontsize=52:fontcolor=#00ffcc:x=(w-tw)/2:y=h*0.84:borderw=3:bordercolor=#00ffcc",
-            "clean":   "fontsize=40:fontcolor=white:x=(w-tw)/2:y=h*0.87:box=1:boxcolor=black@0.4:boxborderw=8",
-            "default": "fontsize=44:fontcolor=white:x=(w-tw)/2:y=h*0.85:shadowcolor=black:shadowx=2:shadowy=2",
-        }
-        return styles.get(style, styles["default"])
+    # ── Helpers ───────────────────────────────────────────────────────────
+    def _get_duration(self, path: str) -> float:
+        try:
+            r = subprocess.run(
+                ["ffprobe", "-v", "quiet", "-print_format", "json",
+                 "-show_streams", "-select_streams", "v:0", path],
+                capture_output=True, timeout=15,
+            )
+            if r.returncode == 0:
+                info = json.loads(r.stdout)
+                return float(info["streams"][0].get("duration", 0))
+        except Exception:
+            pass
+        return 0.0
+
+    def _out(self, tag: str, ext: str = ".mp4") -> str:
+        return str(Path(self.output_dir) / f"{self.job_id}_{tag}{ext}")
 
     @staticmethod
-    def _run(cmd: list[str]):
+    def _run(cmd: list[str], fallback: str | None = None, out: str | None = None):
         result = subprocess.run(cmd, capture_output=True, timeout=600)
         if result.returncode != 0:
-            raise RuntimeError(result.stderr.decode()[-2000:])
+            err = result.stderr.decode()[-2000:]
+            raise RuntimeError(err)

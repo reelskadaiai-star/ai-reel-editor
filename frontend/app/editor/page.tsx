@@ -1,8 +1,8 @@
 "use client";
-import { useState, Suspense } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
-import { ArrowLeft, Download, RefreshCw, Wand2, RotateCcw } from "lucide-react";
+import { ArrowLeft, Download, RefreshCw, Wand2, RotateCcw, Clapperboard } from "lucide-react";
 import toast from "react-hot-toast";
 import useSWR from "swr";
 
@@ -14,7 +14,20 @@ import StatusTracker from "@/components/editor/StatusTracker";
 import HookTextPicker from "@/components/editor/HookTextPicker";
 import TransitionPicker from "@/components/editor/TransitionPicker";
 import api, { fetchJob, renderJob, updateJob } from "@/lib/api";
-import type { Job, TransitionStyle } from "@/lib/types";
+import type { Job, TransitionStyle, EditMode } from "@/lib/types";
+
+const EDIT_MODES: { id: EditMode; label: string; emoji: string; desc: string }[] = [
+  { id: "auto",       label: "Auto",        emoji: "🤖", desc: "AI picks best length" },
+  { id: "short_reel", label: "Short Reel",  emoji: "⚡", desc: "15–60s Instagram/TikTok" },
+  { id: "long_reel",  label: "Long Reel",   emoji: "🎬", desc: "Preserve most footage" },
+  { id: "cinematic",  label: "Cinematic",   emoji: "🎥", desc: "Cinematic storytelling" },
+  { id: "vlog",       label: "Vlog",        emoji: "📹", desc: "Day-in-life vlog style" },
+  { id: "travel",     label: "Travel",      emoji: "✈️", desc: "Vibrant travel montage" },
+  { id: "wedding",    label: "Wedding",     emoji: "💍", desc: "Soft dreamy wedding" },
+  { id: "fast_beat",  label: "Beat Sync",   emoji: "🎵", desc: "Fast cuts to the beat" },
+  { id: "food",       label: "Food Reel",   emoji: "🍽️", desc: "Saturated food closeups" },
+  { id: "business",   label: "Business",    emoji: "💼", desc: "Professional promo" },
+];
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 
@@ -34,6 +47,7 @@ function EditorInner() {
   const jobId = searchParams.get("id") ?? "";
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<EditorTab>("content");
+  const [editMode, setEditMode] = useState<EditMode>("auto");
 
   const { data: job, mutate } = useSWR<Job>(
     jobId ? `/jobs/${jobId}` : null,
@@ -47,11 +61,22 @@ function EditorInner() {
     }
   );
 
+  // Sync edit mode from job when it first loads
+  useEffect(() => {
+    if (job?.editMode) setEditMode(job.editMode as EditMode);
+  }, [job?.editMode]);
+
   const isAnalyzing     = job?.status === "queued" || job?.status === "analyzing";
   const isRendering     = job?.status === "rendering";
   const isReadyToRender = job?.status === "done" && (job.progress ?? 0) >= 40 && !job.outputFile;
   const isRendered      = !!job?.outputFile;
   const isFailed        = job?.status === "failed";
+
+  // ── Edit mode ─────────────────────────────────────────────────────────
+  async function handleEditMode(mode: EditMode) {
+    setEditMode(mode);
+    await updateJob(jobId, { editMode: mode });
+  }
 
   // ── Render ────────────────────────────────────────────────────────────
   async function handleRender() {
@@ -200,12 +225,43 @@ function EditorInner() {
         <div className="lg:w-[400px] lg:sticky lg:top-[57px] lg:h-[calc(100dvh-57px)] flex flex-col items-center justify-center p-4 border-r border-white/5">
           <ReelPreview job={job} />
 
+          {/* Editing mode selector — visible once analysis is done */}
+          {showEditor && (
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="mt-4 w-full"
+            >
+              <div className="flex items-center gap-1.5 mb-2">
+                <Clapperboard className="w-3.5 h-3.5 text-white/40" />
+                <p className="text-xs text-white/40 font-medium uppercase tracking-wide">Edit Mode</p>
+              </div>
+              <div className="flex gap-2 overflow-x-auto scrollbar-none pb-1">
+                {EDIT_MODES.map((m) => (
+                  <button
+                    key={m.id}
+                    title={m.desc}
+                    onClick={() => handleEditMode(m.id)}
+                    className={`shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium border transition-all ${
+                      editMode === m.id
+                        ? "border-brand-500 bg-brand-500/20 text-brand-300"
+                        : "border-white/10 bg-white/5 text-white/50 hover:text-white hover:border-white/20"
+                    }`}
+                  >
+                    <span className="text-sm leading-none">{m.emoji}</span>
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+            </motion.div>
+          )}
+
           {isReadyToRender && (
             <motion.button
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               onClick={handleRender}
-              className="btn-primary mt-5 w-full flex items-center justify-center gap-2"
+              className="btn-primary mt-4 w-full flex items-center justify-center gap-2"
             >
               <Wand2 className="w-4 h-4" />
               Generate Reel
