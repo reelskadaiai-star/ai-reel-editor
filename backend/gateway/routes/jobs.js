@@ -40,6 +40,10 @@ router.get("/:jobId", optionalAuth, async (req, res) => {
           }
         );
       } else if (data.state === "SUCCESS" && job.status === "rendering") {
+        // Files live on HF Space disk — build full public URLs using AI_URL
+        const outputUrl      = `${AI_URL}/outputs/${data.result.output_file}`;
+        const watermarkedUrl = `${AI_URL}/outputs/${data.result.watermarked_file}`;
+        const thumbnailUrl   = `${AI_URL}/outputs/${data.result.thumbnail_file}`;
         await Job.findOneAndUpdate(
           { jobId },
           {
@@ -49,6 +53,9 @@ router.get("/:jobId", optionalAuth, async (req, res) => {
             outputFile: data.result.output_file,
             watermarkedFile: data.result.watermarked_file,
             thumbnailFile: data.result.thumbnail_file,
+            outputUrl,
+            watermarkedUrl,
+            thumbnailUrl,
           }
         );
       } else if (data.state === "FAILURE") {
@@ -113,14 +120,16 @@ router.post("/:jobId/render", optionalAuth, async (req, res) => {
   res.json({ jobId, status: "rendering" });
 });
 
-// GET /api/jobs/:jobId/download — redirect to output file (post-payment)
+// GET /api/jobs/:jobId/download — redirect to HF Space output file
 router.get("/:jobId/download", optionalAuth, async (req, res) => {
   const { jobId } = req.params;
   const job = await Job.findOne({ jobId });
   if (!job) return res.status(404).json({ error: "Not found" });
   if (!job.outputFile) return res.status(409).json({ error: "Not rendered yet" });
 
-  return res.redirect(`/outputs/${job.outputFile}`);
+  // outputUrl is the full HF Space URL; fall back to constructing it if missing
+  const url = job.outputUrl || `${AI_URL}/outputs/${job.outputFile}`;
+  return res.redirect(url);
 });
 
 module.exports = router;

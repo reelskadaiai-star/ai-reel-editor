@@ -96,11 +96,13 @@ function EditorInner() {
               {isFailed ? "Failed" : isRendered ? "Ready" : isRendering ? "Rendering…" : isAnalyzing ? "Analysing…" : "Analysed"}
             </span>
           )}
-          {/* Direct download link — no modal, no payment */}
+          {/* Direct download — use HF Space URL if available, else gateway redirect */}
           {isRendered && (
             <a
-              href={`${API}/api/jobs/${jobId}/download`}
+              href={job?.outputUrl ?? `${API}/api/jobs/${jobId}/download`}
               download
+              target="_blank"
+              rel="noreferrer"
               className="btn-primary flex items-center gap-2 text-sm py-2 px-4"
             >
               <Download className="w-4 h-4" /> Download

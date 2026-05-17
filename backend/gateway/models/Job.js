@@ -63,11 +63,16 @@ const jobSchema = new mongoose.Schema(
     includeHookText: { type: Boolean, default: true },
     hookText: String,
 
-    // Output
+    // Output — filenames (on HF Space disk)
     outputFile: String,
     watermarkedFile: String,
     thumbnailFile: String,
     outputResolution: { type: String, default: "1080x1920" },
+
+    // Output — full public URLs served by HF Space
+    outputUrl: String,
+    watermarkedUrl: String,
+    thumbnailUrl: String,
 
     // Payment
     paid: { type: Boolean, default: false },

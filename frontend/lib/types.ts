@@ -45,10 +45,15 @@ export interface Job {
   hookText?: string;
   includeHookText: boolean;
 
-  // Output
+  // Output — filenames (on HF Space)
   outputFile?: string;
   watermarkedFile?: string;
   thumbnailFile?: string;
+
+  // Output — full public URLs (served directly by HF Space)
+  outputUrl?: string;
+  watermarkedUrl?: string;
+  thumbnailUrl?: string;
 
   // Payment
   paid: boolean;

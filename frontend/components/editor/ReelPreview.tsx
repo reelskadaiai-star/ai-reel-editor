@@ -4,18 +4,23 @@ import { motion } from "framer-motion";
 import { Play, Pause, Film } from "lucide-react";
 import type { Job } from "@/lib/types";
 
+// Files live on HF Space — use the stored public URL directly.
+// Fall back to the gateway /outputs/ path only for legacy jobs.
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
-function outputUrl(file: string) { return `${API}/outputs/${file}`; }
+function legacyUrl(file: string) { return `${API}/outputs/${file}`; }
 
 interface Props { job: Job | undefined }
 
 export default function ReelPreview({ job }: Props) {
   const [playing, setPlaying] = useState(false);
 
-  const hasPreview = !!(job?.outputFile || job?.watermarkedFile);
-  const videoSrc = hasPreview
-    ? outputUrl(job!.outputFile ?? job!.watermarkedFile!)
-    : null;
+  // Prefer the pre-built HF Space URL; fall back to filename-based construction
+  const videoSrc =
+    job?.outputUrl ??
+    job?.watermarkedUrl ??
+    (job?.outputFile ? legacyUrl(job.outputFile) : null) ??
+    (job?.watermarkedFile ? legacyUrl(job.watermarkedFile) : null) ??
+    null;
 
   return (
     <div className="relative w-full max-w-[220px] mx-auto">
@@ -69,9 +74,9 @@ export default function ReelPreview({ job }: Props) {
       </div>
 
       {/* Thumbnail strip */}
-      {job?.thumbnailFile && (
+      {(job?.thumbnailUrl || job?.thumbnailFile) && (
         <img
-          src={outputUrl(job.thumbnailFile)}
+          src={job.thumbnailUrl ?? legacyUrl(job.thumbnailFile!)}
           alt="Thumbnail"
           className="mt-3 w-full rounded-xl object-cover aspect-video opacity-60"
         />
