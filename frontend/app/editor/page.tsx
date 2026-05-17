@@ -180,23 +180,13 @@ function EditorInner() {
             </span>
           )}
 
-          {isRendered && !isRendering && (
-            <button
-              onClick={handleRegenerate}
-              className="btn-ghost flex items-center gap-1.5 text-sm"
-              title="Generate a different cut"
-            >
-              <RotateCcw className="w-4 h-4" /> Regenerate
-            </button>
-          )}
-
           {isRendered && (
             <a
               href={job?.outputUrl ?? `${API}/api/jobs/${jobId}/download`}
               download
               target="_blank"
               rel="noreferrer"
-              className="btn-primary flex items-center gap-2 text-sm py-2 px-4"
+              className="btn-primary flex items-center gap-2 text-sm py-2 px-4 hidden sm:flex"
             >
               <Download className="w-4 h-4" /> Download
             </a>
@@ -226,6 +216,26 @@ function EditorInner() {
             <div className="mt-5 flex items-center gap-2 text-orange-400 text-sm">
               <RefreshCw className="w-4 h-4 animate-spin" />
               Rendering your reel…
+            </div>
+          )}
+
+          {isRendered && !isRendering && (
+            <div className="mt-4 flex flex-col gap-2 w-full">
+              <a
+                href={job?.outputUrl ?? `${API}/api/jobs/${jobId}/download`}
+                download
+                target="_blank"
+                rel="noreferrer"
+                className="btn-primary flex items-center justify-center gap-2 text-sm py-2.5 w-full"
+              >
+                <Download className="w-4 h-4" /> Download Reel
+              </a>
+              <button
+                onClick={handleRegenerate}
+                className="btn-ghost flex items-center justify-center gap-2 text-sm py-2.5 w-full border border-white/10 rounded-xl hover:border-brand-500/50"
+              >
+                <RotateCcw className="w-4 h-4" /> Regenerate Different Cut
+              </button>
             </div>
           )}
 

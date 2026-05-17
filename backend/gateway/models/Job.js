@@ -45,7 +45,7 @@ const jobSchema = new mongoose.Schema(
     // AI Analysis results
     contentType: {
       type: String,
-      enum: ["real_estate", "food", "product", "dance", "travel", "cinematic",
+      enum: ["real_estate", "food", "product", "dance", "travel", "nature", "cinematic",
              "vlog", "interview", "comedy", "fitness", "education", "lifestyle", "unknown"],
       default: "unknown",
     },

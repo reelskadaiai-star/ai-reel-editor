@@ -14,7 +14,7 @@ export interface Segment {
 }
 
 export type ContentType =
-  | "real_estate" | "food" | "product" | "dance" | "travel" | "cinematic"
+  | "real_estate" | "food" | "product" | "dance" | "travel" | "nature" | "cinematic"
   | "vlog" | "interview" | "comedy" | "fitness" | "education" | "lifestyle" | "unknown";
 
 export type TransitionStyle =

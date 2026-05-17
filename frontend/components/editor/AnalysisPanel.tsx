@@ -2,7 +2,7 @@
 import { motion } from "framer-motion";
 import {
   Home, UtensilsCrossed, ShoppingBag, Music2, Plane, Film,
-  Dumbbell, BookOpen, Sparkles, Video, Laugh, Mic, Cpu,
+  Dumbbell, BookOpen, Sparkles, Video, Laugh, Mic, Cpu, Leaf,
 } from "lucide-react";
 import type { Job, ContentType } from "@/lib/types";
 
@@ -12,6 +12,7 @@ const TYPE_META: Record<string, { icon: any; label: string; color: string; bg: s
   product:     { icon: ShoppingBag,    label: "Product",     color: "text-purple-400", bg: "bg-purple-500/15" },
   dance:       { icon: Music2,         label: "Dance",       color: "text-pink-400",   bg: "bg-pink-500/15" },
   travel:      { icon: Plane,          label: "Travel",      color: "text-sky-400",    bg: "bg-sky-500/15" },
+  nature:      { icon: Leaf,           label: "Nature",      color: "text-emerald-400",bg: "bg-emerald-500/15" },
   cinematic:   { icon: Film,           label: "Cinematic",   color: "text-amber-400",  bg: "bg-amber-500/15" },
   fitness:     { icon: Dumbbell,       label: "Fitness",     color: "text-green-400",  bg: "bg-green-500/15" },
   education:   { icon: BookOpen,       label: "Education",   color: "text-yellow-400", bg: "bg-yellow-500/15" },

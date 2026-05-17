@@ -379,6 +379,7 @@ TEMPLATE_MAP = {
     "product":     "product_showcase",
     "dance":       "dance_beat_sync",
     "travel":      "travel_cinematic",
+    "nature":      "nature_relaxing",
     "fitness":     "fitness_hype",
     "education":   "education_clean",
     "lifestyle":   "lifestyle_aesthetic",
@@ -394,6 +395,7 @@ HOOK_OPTIONS: dict[str, list[str]] = {
     "product":      ["This changed everything for me 🔥", "I can't believe this actually works 😤", "The product everyone is talking about 👇"],
     "dance":        ["This transition 🔥🔥🔥", "How is this even possible?? 😱", "POV: You just learned this move ✨"],
     "travel":       ["You won't believe this place exists 😱", "Add this to your bucket list NOW 🌍", "POV: Living abroad ✈️"],
+    "nature":       ["This plant is so satisfying 🌿", "Nature's most stunning creation 🌱", "Did you know plants can feel? 🌸"],
     "fitness":      ["This workout changed my body 💪", "30 days of this = results 🔥", "No excuses after watching this 😤"],
     "education":    ["Learn this in 60 seconds 🧠", "I wish I knew this sooner 💡", "This knowledge is worth millions 📚"],
     "lifestyle":    ["POV: Living your best life ✨", "This is the routine that changed everything 🌟", "Small habits, massive results 💫"],
@@ -410,6 +412,7 @@ CTA_MAP = {
     "product":      "Link in bio 🛒",
     "dance":        "Follow for more moves 🕺",
     "travel":       "Follow for more hidden gems 🌍",
+    "nature":       "Follow for plant tips 🌿",
     "fitness":      "Full program in bio 💪",
     "education":    "Follow for daily tips 🧠",
     "lifestyle":    "Follow my journey ✨",
@@ -488,6 +491,23 @@ CAPTION_POOLS: dict[str, list[str]] = {
         "Add to bucket list ✅",
         "No filter needed ✨",
         "More details in bio 👇",
+    ],
+    "nature": [
+        "Water when soil is dry 💧",
+        "Bright indirect light ☀️",
+        "Native to tropical regions 🌍",
+        "Air-purifying plant 🌬️",
+        "Grows up to 3ft tall 📏",
+        "Toxic to pets 🐾 — keep away",
+        "Mist leaves weekly 🌫️",
+        "Repot every 2 years 🪴",
+        "Propagates easily in water 💧",
+        "One of the easiest to grow ✅",
+        "Low maintenance & stunning 🌿",
+        "Did you know it blooms once a year? 🌸",
+        "Thrives in humid environments 🌴",
+        "Fertilise monthly in summer 🌱",
+        "New leaf = plant is happy 💚",
     ],
     "fitness": [
         "Feel the burn 🔥",
@@ -601,7 +621,7 @@ def _generate_content_captions(
     - Pick phrases from the content-type pool in order.
     - Space them across the video, snapping to beats where available.
     - Each caption is shown for `caption_hold` seconds.
-    - Target ~1 caption every 5-6 seconds (so ~5-8 for a 30s reel).
+    - Target ~1 caption every 3 seconds (so ~10 for a 30s reel).
     """
     import random
 
@@ -613,8 +633,8 @@ def _generate_content_captions(
     if duration <= 0:
         duration = 30.0
 
-    # Decide how many captions to show
-    n = max(3, min(len(phrases), int(duration / 5)))
+    # Decide how many captions to show — 1 every ~3 s
+    n = max(3, min(len(phrases), int(duration / 3)))
 
     # Evenly space target times across the video (skip first & last 2s)
     start_offset = 2.0
