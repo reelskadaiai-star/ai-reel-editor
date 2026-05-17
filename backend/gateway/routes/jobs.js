@@ -86,16 +86,18 @@ router.post("/:jobId/render", optionalAuth, async (req, res) => {
   const { jobId } = req.params;
   const job = await Job.findOne({ jobId });
   if (!job) return res.status(404).json({ error: "Job not found" });
-  if (job.status !== "done" || job.progress < 40) {
-    return res.status(409).json({ error: "Analysis not complete yet" });
+
+  // Return early for already-active states — must come before the "status must be done" check
+  if (job.status === "rendering") {
+    return res.json({ jobId, status: "rendering", message: "Already rendering" });
   }
   if (job.outputFile) {
     return res.json({ jobId, status: "already_rendered", outputFile: job.outputFile });
   }
 
-  // Guard against duplicate render requests (e.g. double-click)
-  if (job.status === "rendering") {
-    return res.json({ jobId, status: "rendering", message: "Already rendering" });
+  // Analysis must be complete before we can render
+  if (job.status !== "done" || job.progress < 40) {
+    return res.status(409).json({ error: "Analysis not complete yet" });
   }
 
   // Apply any body overrides before rendering
