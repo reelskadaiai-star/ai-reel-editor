@@ -100,7 +100,9 @@ class SceneDetector:
     # ── Internal ──────────────────────────────────────────────────────
     def _make_scene(self, start: float, end: float, metrics: list[float]) -> dict:
         motion = float(np.mean(metrics)) if metrics else 0.0
-        is_dead = motion < 3.0 or (end - start) < 1.0
+        # Talking-head / nature videos have inherently low motion — don't prune them
+        # Only mark as dead if motion is truly near-zero AND the clip is very short
+        is_dead = motion < 1.5 and (end - start) < 1.0
         return {
             "start": round(start, 3),
             "end": round(end, 3),
@@ -111,11 +113,15 @@ class SceneDetector:
 
     def _content_weight(self, content_type: str, scene: dict) -> float:
         weights = {
-            "real_estate": 0.9,  # prefer smooth, well-lit scenes
-            "food": 1.2,         # prefer high motion (sizzle, pour)
-            "product": 1.0,
-            "dance": 1.4,
-            "travel": 1.1,
+            "real_estate": 0.9,   # prefer smooth, well-lit scenes
+            "food":        1.2,   # prefer high motion (sizzle, pour)
+            "product":     1.0,
+            "dance":       1.4,   # prefer high-motion beats
+            "travel":      1.1,
+            "nature":      0.7,   # slow, calm — low motion is normal
+            "education":   0.6,   # talking head — low motion is expected; keep all segments
+            "interview":   0.6,   # same
+            "vlog":        0.7,
         }
         return weights.get(content_type, 1.0)
 

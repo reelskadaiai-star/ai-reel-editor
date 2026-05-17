@@ -28,12 +28,15 @@ LABELS = [
     "travel tourism city landmark sightseeing destination street architecture",
     "plants flowers gardening nature garden botanical leaves greenery flora herbs succulent",
     "fitness gym workout exercise training weightlifting running sports athlete",
-    "education tutorial whiteboard teaching explanation learning classroom lecture",
+    # Broader education label — covers explainer, info, tutorial, YouTube creators, any language
+    "person explaining informational educational tutorial knowledge sharing tips advice facts presenter",
     "lifestyle morning routine aesthetic daily vlog self-care wellness",
     "cinematic dramatic moody artistic film photography sunset portrait",
-    "vlog talking head personal daily life selfie camera person speaking",
+    # Vlog: casual personal storytelling
+    "vlog person talking casually to camera personal daily life storytelling selfie informal",
     "interview conversation discussion podcast two people talking sitting",
-    "comedy funny joke humour sketch prank meme reaction",
+    # Comedy: specific visual comedy markers — exaggerated expressions, props, sketch
+    "comedian comedy sketch prank funny reaction exaggerated facial expression humour joke meme",
 ]
 
 LABEL_KEYS = [
@@ -78,6 +81,20 @@ class ContentClassifier:
         else:
             label, confidence = self._heuristic_classify(frames, dominant_colors)
 
+        # ── Post-classification sanity: talking-head override ─────────
+        # If CLIP chose "comedy" but the video looks like a talking-head
+        # (person dominating the frame, low motion, indoor) → prefer "education".
+        # This corrects misclassification of informational/educational creators
+        # (Tamil, Hindi, regional-language YouTubers, etc.) who have expressive
+        # delivery but are NOT doing comedy sketches.
+        if label == "comedy" and confidence < 0.75:
+            skin = self._skin_ratio(frames[:10])
+            logger.info(f"[Classifier] comedy with low conf — skin_ratio={skin:.2f}")
+            if skin > 0.12:   # person dominates frame → reclassify
+                label = "education"
+                confidence = max(confidence, 0.52)
+                logger.info("[Classifier] Reclassified comedy → education (talking-head heuristic)")
+
         logger.info(f"[Classifier] → {label} ({confidence:.2f})")
         return label, confidence, dominant_colors
 
@@ -109,7 +126,8 @@ class ContentClassifier:
     ) -> tuple[str, float]:
         """
         Rough heuristic based on colour statistics when CLIP is unavailable.
-        Green-dominant → nature; bright+low-sat → real_estate; high-sat → food.
+        Green-dominant → nature; bright+low-sat → real_estate; high-sat → food;
+        high skin-ratio → education (talking-head presenter).
         """
         if not frames:
             return "unknown", 0.3
@@ -122,8 +140,12 @@ class ContentClassifier:
             np.mean((f[:, :, 0] >= 35) & (f[:, :, 0] <= 85))
             for f in hsv_frames
         ]))
+        skin_ratio = self._skin_ratio(frames[:8])
 
-        logger.info(f"[Heuristic] sat={avg_sat:.0f} val={avg_val:.0f} green={green_ratio:.2f}")
+        logger.info(
+            f"[Heuristic] sat={avg_sat:.0f} val={avg_val:.0f} "
+            f"green={green_ratio:.2f} skin={skin_ratio:.2f}"
+        )
 
         if green_ratio > 0.25:                          # dominant green → nature/plants
             return "nature", 0.60
@@ -131,7 +153,31 @@ class ContentClassifier:
             return "real_estate", 0.55
         if avg_sat > 110:                               # vivid colours → food
             return "food", 0.50
+        if skin_ratio > 0.12:                           # person dominates → informational/education
+            return "education", 0.52
         return "unknown", 0.30
+
+    # ── Skin-tone ratio ────────────────────────────────────────────────
+    def _skin_ratio(self, frames: list[np.ndarray]) -> float:
+        """
+        Estimate the fraction of pixels that are skin-tone.
+        Uses HSV ranges that cover a broad range of skin tones (light to dark).
+        A ratio > 0.10–0.15 strongly suggests a person occupies most of the frame.
+        """
+        if not frames:
+            return 0.0
+        ratios = []
+        for frame in frames:
+            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+            h, s, v = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
+            # Broad skin-tone window: hue 0-25 (red-orange), sat 30-170, val 50-255
+            mask = (
+                ((h <= 25) | (h >= 165)) &   # red-orange-pink hues (wraps at 180)
+                (s >= 30) & (s <= 170) &
+                (v >= 50)
+            )
+            ratios.append(float(mask.mean()))
+        return float(np.mean(ratios))
 
     # ── Helpers ───────────────────────────────────────────────────────
     def _sample_frames(self, video_path: str, scenes: list[dict], n: int) -> list[np.ndarray]:

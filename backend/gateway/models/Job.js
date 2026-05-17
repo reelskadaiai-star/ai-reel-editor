@@ -4,7 +4,7 @@ const segmentSchema = new mongoose.Schema(
   {
     start: Number,
     end: Number,
-    type: { type: String, enum: ["highlight", "dead", "transition", "beat"] },
+    type: { type: String, enum: ["highlight", "normal", "dead", "transition", "beat"] },
     score: Number,
     label: String,
   },

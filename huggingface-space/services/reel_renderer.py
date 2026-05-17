@@ -112,6 +112,8 @@ class ReelRenderer:
         self.cta_text = cta_text
         self.speed_ramp = speed_ramp
         self.zoom_punch = zoom_punch
+        # Derive video duration from segments for _synthesise_clips fallback
+        self.duration = max((s["end"] for s in segments), default=60.0) if segments else 60.0
 
     def render(self) -> str:
         clips = self._select_clips()
@@ -124,7 +126,9 @@ class ReelRenderer:
                 clip_paths.append(out)
 
         if not clip_paths:
-            raise RuntimeError("No valid clips extracted")
+            # Absolute last resort: use the raw video file directly
+            logger.warning("[Renderer] All clip extractions failed — using raw video as fallback")
+            clip_paths = [self.video_path]
 
         concat_path = self._concatenate_xfade(clip_paths)
         graded_path = self._apply_grade(concat_path)
@@ -173,15 +177,26 @@ class ReelRenderer:
 
     # ── Private ───────────────────────────────────────────────────────
     def _select_clips(self) -> list[dict]:
-        highlights = [s for s in self.segments if s["type"] in ("highlight", "normal")]
-        highlights.sort(key=lambda s: s["score"], reverse=True)
+        # Fallback chain: highlights → all non-dead → all segments → synthesise
+        candidates = [s for s in self.segments if s["type"] in ("highlight", "normal")]
+        if not candidates:
+            candidates = [s for s in self.segments if s["type"] != "dead"]
+        if not candidates:
+            candidates = list(self.segments)
+
+        # If still empty (no segments at all), synthesise uniform clips
+        if not candidates:
+            logger.warning("[Renderer] No segments — synthesising clips from whole video")
+            return self._synthesise_clips()
+
+        candidates.sort(key=lambda s: s["score"], reverse=True)
 
         selected = []
         total = 0.0
         max_clip = 6.0 if self.content_type == "food" else 8.0
-        min_clip = 1.5
+        min_clip = 1.0  # lowered from 1.5 so short clips still work
 
-        for seg in highlights:
+        for seg in candidates:
             dur = seg["end"] - seg["start"]
             if dur < min_clip:
                 continue
@@ -189,7 +204,7 @@ class ReelRenderer:
             remaining = self.target_duration - total
             if clip_dur > remaining:
                 clip_dur = remaining
-                if clip_dur < 1.0:
+                if clip_dur < 0.5:
                     break
             start = self._snap_to_beat(seg["start"])
             selected.append({"start": start, "dur": clip_dur, "score": seg["score"]})
@@ -197,8 +212,29 @@ class ReelRenderer:
             if total >= self.target_duration:
                 break
 
+        # If we still got nothing (all clips < min_clip), synthesise
+        if not selected:
+            logger.warning("[Renderer] All segments too short — synthesising clips")
+            return self._synthesise_clips()
+
         selected.sort(key=lambda c: c["start"])
         return selected
+
+    def _synthesise_clips(self) -> list[dict]:
+        """Slice the whole video into equal chunks when no usable segments exist."""
+        vid_dur = self.duration if self.duration > 0 else 60.0
+        n = max(1, min(8, int(self.target_duration / 5)))
+        chunk = vid_dur / n
+        clips = []
+        total = 0.0
+        for i in range(n):
+            start = i * chunk
+            dur = min(chunk, self.target_duration - total)
+            clips.append({"start": round(start, 2), "dur": round(dur, 2), "score": 0.5})
+            total += dur
+            if total >= self.target_duration:
+                break
+        return clips
 
     def _snap_to_beat(self, t: float) -> float:
         if not self.beats:
