@@ -1,7 +1,7 @@
 "use client";
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { Play, Pause, Lock, Film } from "lucide-react";
+import { Play, Pause, Film } from "lucide-react";
 import type { Job } from "@/lib/types";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
@@ -12,9 +12,9 @@ interface Props { job: Job | undefined }
 export default function ReelPreview({ job }: Props) {
   const [playing, setPlaying] = useState(false);
 
-  const hasPreview = job?.watermarkedFile || job?.outputFile;
+  const hasPreview = !!(job?.outputFile || job?.watermarkedFile);
   const videoSrc = hasPreview
-    ? outputUrl(job!.paid ? job!.outputFile! : job!.watermarkedFile!)
+    ? outputUrl(job!.outputFile ?? job!.watermarkedFile!)
     : null;
 
   return (
@@ -28,7 +28,7 @@ export default function ReelPreview({ job }: Props) {
               className="w-full h-full object-cover"
               loop
               playsInline
-              muted={!job?.paid}
+              muted
               onPlay={() => setPlaying(true)}
               onPause={() => setPlaying(false)}
               id="reel-preview-video"
@@ -50,13 +50,6 @@ export default function ReelPreview({ job }: Props) {
               </motion.div>
             </button>
 
-            {/* Watermark badge */}
-            {!job?.paid && (
-              <div className="absolute bottom-3 right-3 flex items-center gap-1 bg-black/60 backdrop-blur-sm rounded-full px-2 py-1">
-                <Lock className="w-3 h-3 text-white/60" />
-                <span className="text-xs text-white/60">Watermarked</span>
-              </div>
-            )}
           </>
         ) : (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-white/20">
