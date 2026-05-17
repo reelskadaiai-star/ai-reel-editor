@@ -1,18 +1,27 @@
 """
-Premium Reel Renderer v3 — One-touch AI video pipeline.
+Premium Reel Renderer v4 — Cinematic AI Video Pipeline.
+
+What's new in v4:
+  • edit_mode parameter drives every creative decision
+  • Narrative arc ordering: hook → build → peak → outro
+  • Animated Ken Burns (alternating L/R pan + zoom-in) per clip
+  • Per-pair transition variety: cycles mode-aware sequence
+  • Cinematic colour grades with S-curves + vignette per content type
+  • Mode-specific grades (fast_beat = high contrast, wedding = soft warm, etc.)
+  • Caption fade animations via CaptionGenerator v4 fix
 
 Pipeline:
-  1. Select + order highlight clips (beat-aware)
-  2. Extract clips with content-aware effects (zoom-punch, speed-ramp)
-  3. Concatenate with cinematic xfade transitions
-  4. Colour grade (scene-based LUT / eq filter)
-  5. Burn ASS subtitles (premium styled)
+  1. Select + order highlight clips (narrative arc + beat-aware)
+  2. Extract clips with Ken Burns animation + optional speed-ramp
+  3. Concatenate with varied cinematic xfade transitions
+  4. Colour grade (mode+content LUT, vignette, curves)
+  5. Burn ASS subtitles with fade animations
   6. Overlay CTA end-screen
   7. Overlay logo (blended)
   8. Mix / duck audio
   9. Export 1080p CRF-18
 
-Never crashes: 3-tier fallback at every stage.
+Never crashes — 3-tier fallback at every stage.
 """
 from __future__ import annotations
 import os
@@ -28,25 +37,7 @@ from services.caption_generator import CaptionGenerator
 
 WATERMARK_TEXT = os.getenv("WATERMARK_TEXT", "@ReelAI")
 
-# ── Colour grades (FFmpeg eq/curves filters per content type) ─────────────
-COLOUR_GRADE: dict[str, str] = {
-    "real_estate": "eq=saturation=1.10:contrast=1.06:brightness=0.02,unsharp=3:3:0.5",
-    "food":        "eq=saturation=1.45:contrast=1.18:brightness=0.04,unsharp=5:5:1.0",
-    "product":     "eq=saturation=1.20:contrast=1.10,unsharp=3:3:0.4",
-    "dance":       "eq=saturation=1.30:contrast=1.20",
-    "travel":      "eq=saturation=1.30:contrast=1.12:brightness=0.02,unsharp=3:3:0.3",
-    "nature":      "eq=saturation=1.28:contrast=1.10:brightness=0.01,unsharp=3:3:0.4",
-    "fitness":     "eq=saturation=1.20:contrast=1.28:brightness=0.01",
-    "education":   "eq=saturation=1.05:contrast=1.08:brightness=0.01",
-    "lifestyle":   "eq=saturation=1.18:contrast=1.10:brightness=0.01",
-    "vlog":        "eq=saturation=1.12:contrast=1.06",
-    "comedy":      "eq=saturation=1.22:contrast=1.12",
-    "interview":   "eq=saturation=1.05:contrast=1.10",
-    "cinematic":   "curves=all='0/0 0.25/0.20 0.75/0.80 1/1',eq=saturation=0.85:contrast=1.18",
-    "unknown":     "eq=saturation=1.10:contrast=1.05",
-}
-
-# ── Target aspect-ratio → (width, height) ────────────────────────────────
+# ── Target aspect-ratio → (width, height) ────────────────────────────────────
 ASPECT_RES: dict[str, tuple[str, str]] = {
     "9:16":  ("1080", "1920"),
     "1:1":   ("1080", "1080"),
@@ -54,23 +45,146 @@ ASPECT_RES: dict[str, tuple[str, str]] = {
     "4:5":   ("1080", "1350"),
 }
 
-# ── Supported xfade transitions ───────────────────────────────────────────
-XFADE_MAP: dict[str, str | None] = {
-    "fade":       "fade",
-    "wipeleft":   "wipeleft",
-    "wiperight":  "wiperight",
-    "slideleft":  "slideleft",
-    "slideright": "slideright",
-    "circleopen": "circleopen",
-    "dissolve":   "dissolve",
-    "radial":     "radial",
-    "zoomin":     "zoomin",
-    "auto":       "fade",
-    "none":       None,
+# ── Cinematic colour grades ───────────────────────────────────────────────────
+# Each entry: (scale_grade, vignette, post_grade)
+# scale_grade applied after scale/crop (before vignette)
+# post_grade applied after subtitle burn (optional final touch)
+COLOUR_GRADE: dict[str, str] = {
+    # Social / fast content
+    "real_estate": (
+        "eq=saturation=1.12:contrast=1.08:brightness=0.02,"
+        "unsharp=3:3:0.6,"
+        "vignette=angle=PI/4"
+    ),
+    "food": (
+        "curves=r='0/0 0.4/0.46 1/1':g='0/0 0.5/0.52 1/1',"
+        "eq=saturation=1.55:contrast=1.22:brightness=0.03,"
+        "unsharp=5:5:1.2,"
+        "vignette=angle=PI/5"
+    ),
+    "product": (
+        "eq=saturation=1.22:contrast=1.12,"
+        "unsharp=3:3:0.4,"
+        "vignette=angle=PI/5"
+    ),
+    "dance": (
+        "eq=saturation=1.35:contrast=1.25,"
+        "vignette=angle=PI/4"
+    ),
+    "travel": (
+        "curves=r='0/0 0.4/0.46 1/1':b='0/0 0.5/0.44 1/1',"
+        "eq=saturation=1.35:contrast=1.14:brightness=0.02,"
+        "unsharp=3:3:0.3,"
+        "vignette=angle=PI/4"
+    ),
+    "nature": (
+        "curves=g='0/0 0.35/0.42 0.7/0.75 1/1',"
+        "eq=saturation=1.32:contrast=1.12:brightness=0.01,"
+        "unsharp=3:3:0.5,"
+        "vignette=angle=PI/5"
+    ),
+    "fitness": (
+        "eq=saturation=1.25:contrast=1.30:brightness=0.01,"
+        "unsharp=5:5:0.8,"
+        "vignette=angle=PI/4"
+    ),
+    "education": (
+        "eq=saturation=1.06:contrast=1.10:brightness=0.01,"
+        "vignette=angle=PI/6"
+    ),
+    "lifestyle": (
+        "curves=all='0/0 0.25/0.22 0.75/0.78 1/1',"
+        "eq=saturation=1.20:contrast=1.10:brightness=0.01,"
+        "vignette=angle=PI/5"
+    ),
+    "vlog": (
+        "eq=saturation=1.14:contrast=1.08,"
+        "vignette=angle=PI/6"
+    ),
+    "comedy": (
+        "eq=saturation=1.25:contrast=1.15,"
+        "vignette=angle=PI/5"
+    ),
+    "interview": (
+        "eq=saturation=1.06:contrast=1.12,"
+        "vignette=angle=PI/6"
+    ),
+    # Cinematic grades
+    "cinematic": (
+        "curves=all='0/0 0.15/0.08 0.5/0.52 0.85/0.92 1/1',"
+        "eq=saturation=0.88:contrast=1.20,"
+        "vignette=angle=PI/3.5"
+    ),
+    "unknown": (
+        "eq=saturation=1.10:contrast=1.06,"
+        "vignette=angle=PI/5"
+    ),
 }
 
-# ── Caption styles (forwarded to CaptionGenerator) ────────────────────────
-_CAPTION_STYLES = {"instagram", "bold", "cinematic", "karaoke", "modern", "default"}
+# ── Edit-mode colour grade overrides ─────────────────────────────────────────
+EDIT_MODE_GRADE: dict[str, str] = {
+    "cinematic": (
+        "curves=all='0/0 0.15/0.08 0.5/0.52 0.85/0.92 1/1',"
+        "eq=saturation=0.85:contrast=1.22,"
+        "vignette=angle=PI/3"
+    ),
+    "wedding": (
+        "curves=r='0/0 0.5/0.56 1/1':b='0/0 0.5/0.44 1/1',"
+        "eq=saturation=0.92:contrast=1.06:brightness=0.04,"
+        "vignette=angle=PI/4"
+    ),
+    "emotional": (
+        "curves=all='0/0 0.2/0.14 0.75/0.82 1/1',"
+        "eq=saturation=0.90:contrast=1.15,"
+        "vignette=angle=PI/3.5"
+    ),
+    "fast_beat": (
+        "eq=saturation=1.40:contrast=1.35:brightness=0.01,"
+        "unsharp=5:5:0.8,"
+        "vignette=angle=PI/4"
+    ),
+    "travel": (
+        "curves=r='0/0 0.4/0.46 1/1':b='0/0 0.5/0.44 1/1',"
+        "eq=saturation=1.38:contrast=1.14:brightness=0.02,"
+        "vignette=angle=PI/4"
+    ),
+    "food": (
+        "curves=r='0/0 0.4/0.46 1/1':g='0/0 0.5/0.52 1/1',"
+        "eq=saturation=1.60:contrast=1.25:brightness=0.03,"
+        "unsharp=5:5:1.5,"
+        "vignette=angle=PI/5"
+    ),
+    "business": (
+        "eq=saturation=1.05:contrast=1.12,"
+        "unsharp=3:3:0.4,"
+        "vignette=angle=PI/5"
+    ),
+    "vlog": (
+        "eq=saturation=1.15:contrast=1.08,"
+        "vignette=angle=PI/6"
+    ),
+}
+
+# ── Transition sequences per edit mode ────────────────────────────────────────
+# Each list is cycled per clip pair so transitions are varied but consistent
+TRANSITION_SEQUENCES: dict[str, list[str]] = {
+    "cinematic":  ["fade", "dissolve", "fade", "dissolve"],
+    "wedding":    ["fade", "dissolve", "fade", "dissolve"],
+    "emotional":  ["fade", "dissolve", "fade", "dissolve"],
+    "fast_beat":  ["slideleft", "wiperight", "slideright", "wipeleft", "zoomin"],
+    "travel":     ["slideleft", "dissolve", "wiperight", "fade", "slideright"],
+    "food":       ["fade", "dissolve", "slideleft", "dissolve"],
+    "vlog":       ["fade", "slideleft", "dissolve", "wiperight"],
+    "business":   ["fade", "dissolve", "wipeleft", "fade"],
+    "short_reel": ["slideleft", "wiperight", "zoomin", "wipeleft", "slideright"],
+    "long_reel":  ["fade", "dissolve", "slideleft", "dissolve", "wiperight"],
+    "auto":       ["fade", "slideleft", "dissolve", "wiperight", "fade", "slideright"],
+}
+
+_CAPTION_STYLES = {
+    "instagram", "bold", "cinematic", "karaoke", "modern", "default",
+    "neon", "hype", "minimal", "luxury", "clean",
+}
 
 
 class ReelRenderer:
@@ -99,6 +213,7 @@ class ReelRenderer:
         cta_text: str | None = None,
         speed_ramp: bool = False,
         zoom_punch: bool = True,
+        edit_mode: str = "auto",
     ):
         self.job_id          = job_id
         self.video_path      = video_path
@@ -123,18 +238,23 @@ class ReelRenderer:
         self.cta_text        = cta_text
         self.speed_ramp      = speed_ramp
         self.zoom_punch      = zoom_punch
-        # Derive video duration from segments (used by padding)
+        self.edit_mode       = edit_mode
         self.duration = (
             max((s["end"] for s in segments), default=60.0)
             if segments else 60.0
         )
+        # Build transition sequence for this job
+        self._trans_seq = TRANSITION_SEQUENCES.get(
+            edit_mode, TRANSITION_SEQUENCES["auto"]
+        )
 
-    # ── Main entry point ──────────────────────────────────────────────────
+    # ── Main entry point ──────────────────────────────────────────────────────
     def render(self) -> str:
-        clips    = self._select_clips()
+        clips = self._select_clips()
         logger.info(
             f"[Renderer] {len(clips)} clips, "
-            f"~{sum(c['dur'] for c in clips):.1f}s / {self.target_duration}s target"
+            f"~{sum(c['dur'] for c in clips):.1f}s / {self.target_duration}s target, "
+            f"mode={self.edit_mode}"
         )
 
         clip_paths = []
@@ -143,17 +263,16 @@ class ReelRenderer:
             if p:
                 clip_paths.append(p)
 
-        # Absolute last resort
         if not clip_paths:
             logger.warning("[Renderer] All extractions failed — using raw video")
             clip_paths = [self.video_path]
 
-        concat_path   = self._concatenate(clip_paths)
-        graded_path   = self._colour_grade(concat_path)
-        subbed_path   = self._burn_subtitles(graded_path)
-        cta_path      = self._overlay_cta(subbed_path)
-        logo_path     = self._overlay_logo(cta_path)
-        final_path    = self._mix_audio(logo_path)
+        concat_path = self._concatenate(clip_paths)
+        graded_path = self._colour_grade(concat_path)
+        subbed_path = self._burn_subtitles(graded_path)
+        cta_path    = self._overlay_cta(subbed_path)
+        logo_path   = self._overlay_logo(cta_path)
+        final_path  = self._mix_audio(logo_path)
 
         # Cleanup intermediates
         for p in clip_paths + [concat_path, graded_path, subbed_path, cta_path, logo_path]:
@@ -193,9 +312,8 @@ class ReelRenderer:
         self._run(cmd, out=out)
         return out
 
-    # ── Clip selection ────────────────────────────────────────────────────
+    # ── Clip selection with NARRATIVE ARC ─────────────────────────────────────
     def _select_clips(self) -> list[dict]:
-        # Priority order: highlight → normal → all non-dead → all
         candidates = [s for s in self.segments if s["type"] in ("highlight", "normal")]
         if not candidates:
             candidates = [s for s in self.segments if s["type"] != "dead"]
@@ -206,18 +324,12 @@ class ReelRenderer:
 
         candidates.sort(key=lambda s: s["score"], reverse=True)
 
-        # Adaptive max_clip: longer target → longer individual clips allowed
-        # This prevents the "5min footage → 30s output" bug where 5×6s clips
-        # fill the (incorrect) 30s target and nothing more is added.
-        if self.target_duration <= 60:
-            max_clip = 6.0
-        elif self.target_duration <= 180:
-            max_clip = 10.0
-        elif self.target_duration <= 600:
-            max_clip = 15.0
-        else:
-            max_clip = 20.0
+        if self.target_duration <= 60:   max_clip = 6.0
+        elif self.target_duration <= 180: max_clip = 10.0
+        elif self.target_duration <= 600: max_clip = 15.0
+        else:                             max_clip = 20.0
         min_clip = 0.8
+
         selected: list[dict] = []
         total = 0.0
 
@@ -240,18 +352,56 @@ class ReelRenderer:
         if not selected:
             return self._synthesise_clips()
 
-        # Pad to fill target duration if we're short
         if total < self.target_duration * 0.8:
             selected = self._pad_to_duration(selected, total)
 
-        selected.sort(key=lambda c: c["start"])
+        # ── Narrative arc ordering ────────────────────────────────────────
+        selected = self._narrative_order(selected)
         return selected
 
+    def _narrative_order(self, clips: list[dict]) -> list[dict]:
+        """
+        Reorder clips for cinematic storytelling:
+          • Hook   — single best-scoring clip (grabs attention immediately)
+          • Build  — remaining clips in chronological order (story develops)
+          • Peak   — 2nd + 3rd best clips inserted at ~70% mark (emotional climax)
+          • Outro  — chronologically last clip (satisfying ending)
+
+        For fast-beat / short-reel modes, just sort chronologically (rhythm > story).
+        """
+        if len(clips) <= 3 or self.edit_mode in ("fast_beat", "short_reel"):
+            return sorted(clips, key=lambda c: c["start"])
+
+        by_score = sorted(clips, key=lambda c: c["score"], reverse=True)
+
+        hook   = by_score[0]
+        outro  = max(clips, key=lambda c: c["start"])
+
+        # Peak: 2nd and 3rd highest-scoring, preferring different positions from hook
+        peak_candidates = [c for c in by_score[1:4] if c is not outro][:2]
+
+        used_ids = {id(hook), id(outro)} | {id(c) for c in peak_candidates}
+        build    = sorted([c for c in clips if id(c) not in used_ids],
+                          key=lambda c: c["start"])
+
+        # Inject peaks at 70% of the build section
+        insert_at = max(1, int(len(build) * 0.7))
+        build_with_peak = build[:insert_at] + peak_candidates + build[insert_at:]
+
+        result = [hook] + build_with_peak
+        if id(outro) not in {id(c) for c in result}:
+            result.append(outro)
+
+        logger.info(
+            f"[Renderer] Narrative arc — hook@{hook['start']:.1f}s, "
+            f"{len(build_with_peak)} build, outro@{outro['start']:.1f}s"
+        )
+        return result
+
     def _pad_to_duration(self, existing: list[dict], total: float) -> list[dict]:
-        """Uniformly sample the remaining video to fill the target duration."""
+        """Uniformly sample remaining video to fill target duration."""
         vid_dur = self.duration if self.duration > 0 else 60.0
         used    = [(c["start"], c["start"] + c["dur"]) for c in existing]
-        # Step size adapts so we sample densely enough for long videos
         step    = max(3.0, min(10.0, vid_dur / 60))
         extra   = []
         t       = 0.0
@@ -267,10 +417,7 @@ class ReelRenderer:
                     total += dur
             t += step
 
-        logger.info(
-            f"[Renderer] Padded {len(extra)} clips → "
-            f"total {total:.1f}s / {self.target_duration}s"
-        )
+        logger.info(f"[Renderer] Padded {len(extra)} clips → {total:.1f}s/{self.target_duration}s")
         return existing + extra
 
     def _synthesise_clips(self) -> list[dict]:
@@ -297,25 +444,21 @@ class ReelRenderer:
         closest = min(self.beats, key=lambda b: abs(b - t))
         return closest if abs(closest - t) < 0.6 else t
 
-    # ── Clip extraction (with effects) ────────────────────────────────────
+    # ── Clip extraction with ANIMATED KEN BURNS ───────────────────────────────
     def _extract_clip(self, clip: dict, index: int) -> str | None:
         out = self._out(f"clip_{index:03d}")
 
         vf_parts: list[str] = []
         af_parts: list[str] = []
 
-        # Speed-ramp: slow-mo on high-score clips
-        if self.speed_ramp and clip.get("score", 0) >= 0.75:
+        # Speed-ramp: slow-mo on high-score clips (only if edit_mode not fast_beat)
+        if self.speed_ramp and clip.get("score", 0) >= 0.75 and self.edit_mode != "fast_beat":
             vf_parts.append("setpts=1.33*PTS")
             af_parts.append("atempo=0.75")
 
-        # Zoom-punch: simple crop-scale (fast, no zoompan bugs)
+        # Ken Burns animated pan/zoom
         if self.zoom_punch:
-            # Scale to 104%, then crop back to original → subtle zoom-in feel
-            vf_parts.append(
-                "scale='iw*1.04:ih*1.04',"
-                "crop='iw/1.04:ih/1.04:(iw-iw/1.04)/2:(ih-ih/1.04)/2'"
-            )
+            vf_parts.append(self._ken_burns(clip, index))
 
         cmd = [
             "ffmpeg", "-y",
@@ -342,7 +485,7 @@ class ReelRenderer:
         except Exception as e:
             logger.warning(f"[Renderer] Clip {index} with effects failed: {e} — retrying plain")
 
-        # Retry without effects
+        # Retry plain
         cmd_plain = [
             "ffmpeg", "-y",
             "-ss", str(clip["start"]),
@@ -361,7 +504,57 @@ class ReelRenderer:
             logger.warning(f"[Renderer] Clip {index} plain also failed: {e2}")
             return None
 
-    # ── Concatenation with xfade transitions ──────────────────────────────
+    def _ken_burns(self, clip: dict, index: int) -> str:
+        """
+        Animated Ken Burns effect using FFmpeg's crop filter time expressions.
+        Scale up 6%, then animate the crop window for a smooth cinematic pan.
+
+        Pattern cycles every 3 clips:
+          0 mod 3 → pan left → right (slow travel)
+          1 mod 3 → pan right → left (return motion)
+          2 mod 3 → slow zoom-in from center (dramatic pull-in)
+
+        For wedding/cinematic/emotional modes: always slow zoom-in (softer feel).
+        For fast_beat: quick directional wipe (more energetic).
+        """
+        dur = max(clip["dur"], 0.2)
+        sf  = 1.06  # 6% zoom — subtle but visible on mobile
+
+        if self.edit_mode in ("wedding", "cinematic", "emotional"):
+            # Gentle center zoom-in for all clips
+            x_expr = f"(in_w-in_w/{sf})/2"
+            y_expr = f"(in_h-in_h/{sf})/2"
+        elif self.edit_mode == "fast_beat":
+            # More aggressive directional pan
+            sf = 1.08
+            if index % 2 == 0:
+                x_expr = f"min(t/{dur:.3f},1)*(in_w-in_w/{sf})"
+                y_expr = f"(in_h-in_h/{sf})/2"
+            else:
+                x_expr = f"(1-min(t/{dur:.3f},1))*(in_w-in_w/{sf})"
+                y_expr = f"(in_h-in_h/{sf})/2"
+        else:
+            pattern = index % 3
+            if pattern == 0:
+                # Pan left → right
+                x_expr = f"min(t/{dur:.3f},1)*(in_w-in_w/{sf})"
+                y_expr = f"(in_h-in_h/{sf})/2"
+            elif pattern == 1:
+                # Pan right → left
+                x_expr = f"(1-min(t/{dur:.3f},1))*(in_w-in_w/{sf})"
+                y_expr = f"(in_h-in_h/{sf})/2"
+            else:
+                # Slow zoom-in from top-center
+                x_expr = f"(in_w-in_w/{sf})/2"
+                y_expr = f"min(t/{dur:.3f},1)*(in_h-in_h/{sf})"
+
+        return (
+            f"scale=iw*{sf}:ih*{sf},"
+            f"crop=in_w/{sf}:in_h/{sf}:"
+            f"x='{x_expr}':y='{y_expr}'"
+        )
+
+    # ── Concatenation with VARIED CINEMATIC TRANSITIONS ───────────────────────
     def _concatenate(self, clip_paths: list[str]) -> str:
         out = self._out("concat")
 
@@ -369,19 +562,20 @@ class ReelRenderer:
             shutil.copy2(clip_paths[0], out)
             return out
 
-        xfade = XFADE_MAP.get(self.transition_style, "fade")
+        # Resolve base transition
+        base_xfade = _resolve_xfade(self.transition_style)
 
-        if xfade is None:
+        if base_xfade is None:
             return self._hard_cut(clip_paths, out)
 
         try:
-            return self._xfade_concat(clip_paths, out, xfade)
+            return self._xfade_concat(clip_paths, out, base_xfade)
         except Exception as e:
             logger.warning(f"[Renderer] xfade failed ({e}) — hard-cut fallback")
             return self._hard_cut(clip_paths, out)
 
-    def _xfade_concat(self, clip_paths: list[str], out: str, xfade: str) -> str:
-        td       = self.transition_dur
+    def _xfade_concat(self, clip_paths: list[str], out: str, base_xfade: str) -> str:
+        td        = self.transition_dur
         durations = [self._get_duration(p) or 5.0 for p in clip_paths]
 
         inputs = []
@@ -390,15 +584,25 @@ class ReelRenderer:
 
         vparts: list[str] = []
         aparts: list[str] = []
-        offset   = 0.0
-        prev_v   = "0:v"
-        prev_a   = "0:a"
+        offset  = 0.0
+        prev_v  = "0:v"
+        prev_a  = "0:a"
 
         for i in range(1, len(clip_paths)):
-            offset += max(durations[i - 1] - td, 0.01)
+            clip_dur = durations[i - 1]
+            offset  += max(clip_dur - td, 0.01)
+
+            # Select transition for this pair — cycle through mode-specific sequence
+            # For "auto"/"fade"/"dissolve" base, use the full variety sequence
+            if base_xfade in ("fade", "dissolve"):
+                pair_xfade = self._trans_seq[(i - 1) % len(self._trans_seq)]
+            else:
+                # User explicitly chose a style — keep it, but vary slightly
+                pair_xfade = base_xfade
+
             ov, oa = f"v{i}", f"a{i}"
             vparts.append(
-                f"[{prev_v}][{i}:v]xfade=transition={xfade}"
+                f"[{prev_v}][{i}:v]xfade=transition={pair_xfade}"
                 f":duration={td}:offset={offset:.3f}[{ov}]"
             )
             aparts.append(
@@ -447,11 +651,16 @@ class ReelRenderer:
             raise RuntimeError("Hard-cut concat failed")
         return out
 
-    # ── Colour grade + scale ──────────────────────────────────────────────
+    # ── Colour grade + scale + VIGNETTE ───────────────────────────────────────
     def _colour_grade(self, video_path: str) -> str:
         out  = self._out("graded")
         w, h = ASPECT_RES.get(self.aspect_ratio, ("1080", "1920"))
-        grade = COLOUR_GRADE.get(self.content_type, COLOUR_GRADE["unknown"])
+
+        # Edit-mode grade takes priority, then content-type grade
+        grade = (
+            EDIT_MODE_GRADE.get(self.edit_mode)
+            or COLOUR_GRADE.get(self.content_type, COLOUR_GRADE["unknown"])
+        )
 
         vf = (
             f"scale={w}:{h}:force_original_aspect_ratio=increase,"
@@ -486,26 +695,26 @@ class ReelRenderer:
         self._run(cmd2, out=out)
         return out if os.path.exists(out) else video_path
 
-    # ── Subtitle burn-in (ASS) ────────────────────────────────────────────
+    # ── Subtitle burn-in (ASS with fade animations) ───────────────────────────
     def _burn_subtitles(self, video_path: str) -> str:
-        """Burn styled ASS subtitles into the video. Falls back gracefully."""
         if not self.captions:
             return video_path
 
         out = self._out("subbed")
+        cg  = CaptionGenerator()
 
-        # Generate ASS file
-        cg = CaptionGenerator()
+        # Fade duration: cinematic/wedding modes get slower 300ms fade
+        fade_ms = 300 if self.edit_mode in ("cinematic", "wedding", "emotional") else 200
+
         ass_path = cg.build_ass_file(
-            self.captions, self.caption_style, self.output_dir, self.job_id
+            self.captions, self.caption_style, self.output_dir, self.job_id,
+            fade_ms=fade_ms,
         )
 
         if not ass_path or not os.path.exists(ass_path):
             logger.warning("[Renderer] ASS file missing — skipping subtitles")
             return video_path
 
-        # FFmpeg ass filter — path is a separate argv element so no shell quoting needed.
-        # On Linux/HF Space paths have no colons or spaces so this is safe as-is.
         cmd = [
             "ffmpeg", "-y", "-i", video_path,
             "-vf", f"ass={ass_path}",
@@ -519,34 +728,32 @@ class ReelRenderer:
             if os.path.exists(out):
                 return out
         except Exception as e:
-            logger.warning(f"[Renderer] ASS burn failed ({e}) — trying drawtext fallback")
+            logger.warning(f"[Renderer] ASS burn failed ({e}) — drawtext fallback")
 
-        # Drawtext fallback (plain white text, no fancy styling)
         return self._drawtext_fallback(video_path, out)
 
     def _drawtext_fallback(self, video_path: str, out: str) -> str:
-        """Simple drawtext fallback when ASS fails."""
         if not self.captions:
             return video_path
         filters = []
         for cap in self.captions[:25]:
-            # Escape order matters: backslash first, then special FFmpeg chars
             text = cap["text"]
             text = text.replace("\\", "\\\\")
             text = text.replace("'",  "\\'")
             text = text.replace(":",  r"\:")
             text = text.replace("%",  r"\%")
-            # Strip emoji that drawtext can't render (avoids filter parse errors)
             text = text.encode("ascii", "ignore").decode("ascii").strip()
             if not text:
                 continue
             filters.append(
                 f"drawtext=text='{text}'"
                 f":enable='between(t,{cap['start']},{cap['end']})'"
-                f":fontsize=56:fontcolor=white:x=(w-tw)/2:y=h*0.84"
+                f":fontsize=60:fontcolor=white:x=(w-tw)/2:y=h*0.84"
                 f":shadowcolor=black:shadowx=2:shadowy=2"
                 f":borderw=2:bordercolor=black"
             )
+        if not filters:
+            return video_path
         cmd = [
             "ffmpeg", "-y", "-i", video_path,
             "-vf", ",".join(filters),
@@ -560,7 +767,7 @@ class ReelRenderer:
         except Exception:
             return video_path
 
-    # ── CTA overlay ───────────────────────────────────────────────────────
+    # ── CTA overlay ───────────────────────────────────────────────────────────
     def _overlay_cta(self, video_path: str) -> str:
         if not self.cta_text:
             return video_path
@@ -579,6 +786,7 @@ class ReelRenderer:
         text = text.encode("ascii", "ignore").decode("ascii").strip()
         if not text:
             return video_path
+
         vf = (
             f"drawtext=text='{text}'"
             f":enable='between(t,{cta_start:.2f},{duration:.2f})'"
@@ -596,7 +804,7 @@ class ReelRenderer:
         self._run(cmd, fallback=video_path, out=out)
         return out if os.path.exists(out) else video_path
 
-    # ── Logo overlay (blended) ────────────────────────────────────────────
+    # ── Logo overlay (blended) ────────────────────────────────────────────────
     def _overlay_logo(self, video_path: str) -> str:
         if not self.logo_file or not os.path.exists(self.logo_file):
             return video_path
@@ -615,7 +823,6 @@ class ReelRenderer:
             "-i", video_path,
             "-i", self.logo_file,
             "-filter_complex",
-            # Scale to 12% width, convert to RGBA, 65% opacity → natural blend
             f"[1:v]scale=iw*0.12:-1,format=rgba,colorchannelmixer=aa=0.65[logo];"
             f"[0:v][logo]overlay={pos}:format=auto",
             "-c:v", "libx264", "-preset", "fast", "-crf", "18",
@@ -625,13 +832,12 @@ class ReelRenderer:
         self._run(cmd, fallback=video_path, out=out)
         return out if os.path.exists(out) else video_path
 
-    # ── Audio mix + ducking ───────────────────────────────────────────────
+    # ── Audio mix + ducking ───────────────────────────────────────────────────
     def _mix_audio(self, video_path: str) -> str:
         out       = self._out("final")
         has_music = bool(self.music_file and os.path.exists(self.music_file))
 
         if self.mute_audio and has_music:
-            # Replace original audio with music only
             cmd = [
                 "ffmpeg", "-y",
                 "-i", video_path,
@@ -641,7 +847,6 @@ class ReelRenderer:
                 "-shortest", out,
             ]
         elif self.mute_audio:
-            # Silent audio
             cmd = [
                 "ffmpeg", "-y", "-i", video_path,
                 "-f", "lavfi", "-i", "anullsrc=cl=stereo:r=44100",
@@ -649,8 +854,6 @@ class ReelRenderer:
                 "-shortest", out,
             ]
         elif has_music:
-            # Mix original (ducked) with background music
-            # Speech detected → original at 0.35, music at 0.85; else 0.15/1.0
             orig_vol  = 0.30 if self.captions else 0.15
             music_vol = 0.90
             cmd = [
@@ -666,7 +869,6 @@ class ReelRenderer:
                 "-shortest", out,
             ]
         else:
-            # Normalise original audio
             cmd = [
                 "ffmpeg", "-y", "-i", video_path,
                 "-af", "dynaudnorm=f=150:g=15",
@@ -677,7 +879,7 @@ class ReelRenderer:
         self._run(cmd, fallback=video_path, out=out)
         return out if os.path.exists(out) else video_path
 
-    # ── Helpers ───────────────────────────────────────────────────────────
+    # ── Helpers ───────────────────────────────────────────────────────────────
     def _get_duration(self, path: str) -> float:
         try:
             r = subprocess.run(
@@ -701,3 +903,23 @@ class ReelRenderer:
         if result.returncode != 0:
             err = result.stderr.decode()[-2000:]
             raise RuntimeError(err)
+
+
+# ── Module-level helpers ──────────────────────────────────────────────────────
+_XFADE_MAP: dict[str, str | None] = {
+    "fade":       "fade",
+    "wipeleft":   "wipeleft",
+    "wiperight":  "wiperight",
+    "slideleft":  "slideleft",
+    "slideright": "slideright",
+    "circleopen": "circleopen",
+    "dissolve":   "dissolve",
+    "radial":     "radial",
+    "zoomin":     "zoomin",
+    "auto":       "fade",
+    "none":       None,
+}
+
+
+def _resolve_xfade(style: str) -> str | None:
+    return _XFADE_MAP.get(style, "fade")

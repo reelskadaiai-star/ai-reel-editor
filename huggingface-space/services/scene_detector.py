@@ -174,29 +174,78 @@ class SceneDetector:
         has_face       = max_face > 0
 
         # ── Unusable detection (very conservative) ─────────────────────
-        # Only mark as unusable if the scene is GENUINELY bad.
-        # Do NOT penalise low-motion (talking head) or normal indoor lighting.
         is_unusable = (
-            avg_brightness < 12 or       # near-black (completely dark)
-            avg_brightness > 248 or      # blown-out white
-            (avg_motion > 30 and avg_sharpness < 15)   # extreme shake + blur together
+            avg_brightness < 12 or
+            avg_brightness > 248 or
+            (avg_motion > 30 and avg_sharpness < 15)
         )
 
-        label = ""
-        if has_face:            label = "face"
-        if avg_sharpness < 30:  label = "blurry"
-        if avg_brightness < 20: label = "dark"
+        # ── Semantic label ─────────────────────────────────────────────
+        # Multi-label: describes scene category and shot type
+        labels = []
+
+        # Shot type
+        if has_face:
+            labels.append("face")
+            if max_face >= 0.8:
+                labels.append("close_up")
+        if avg_motion > 8.0:
+            labels.append("action")
+        elif avg_motion < 1.5:
+            labels.append("static")
+
+        # Brightness character
+        if avg_brightness > 180:
+            labels.append("bright")
+        elif avg_brightness < 40:
+            labels.append("dark")
+
+        # Quality markers
+        if avg_sharpness < 30:
+            labels.append("blurry")
+        elif avg_sharpness > 200:
+            labels.append("sharp")
+
+        # Colour character (use last sampled frame)
+        if samples:
+            _, last_bgr, _ = samples[-1]
+            mean_bgr = last_bgr.mean(axis=(0, 1))  # [B, G, R]
+            b_ch, g_ch, r_ch = float(mean_bgr[0]), float(mean_bgr[1]), float(mean_bgr[2])
+            total = b_ch + g_ch + r_ch + 1e-6
+            if g_ch / total > 0.38:
+                labels.append("green_dominant")   # nature / plants
+            if r_ch / total > 0.36:
+                labels.append("warm_tones")        # food / sunset / skin
+            if b_ch / total > 0.38:
+                labels.append("cool_tones")        # sky / water / night
+
+            # Skin-tone heuristic (talking head / portrait)
+            skin_pixels = np.sum(
+                (last_bgr[:, :, 2] > 80) &   # R > 80
+                (last_bgr[:, :, 1] > 40) &   # G > 40
+                (last_bgr[:, :, 0] < 140) &  # B < 140
+                (last_bgr[:, :, 2] > last_bgr[:, :, 2].mean())
+            )
+            total_pixels = last_bgr.shape[0] * last_bgr.shape[1]
+            if skin_pixels / total_pixels > 0.20:
+                labels.append("skin_dominant")     # portrait / talking head
+
+        # Landscape heuristic: wide aspect, no face, low motion
+        if not has_face and avg_motion < 5.0 and avg_sharpness > 50:
+            labels.append("landscape")
+
+        label = ",".join(labels) if labels else "normal"
 
         return {
-            "start":      round(start, 3),
-            "end":        round(end, 3),
-            "sharpness":  round(avg_sharpness, 1),
-            "brightness": round(avg_brightness, 1),
-            "motion":     round(avg_motion, 2),
-            "face_score": round(max_face, 3),
-            "has_face":   has_face,
+            "start":       round(start, 3),
+            "end":         round(end, 3),
+            "sharpness":   round(avg_sharpness, 1),
+            "brightness":  round(avg_brightness, 1),
+            "motion":      round(avg_motion, 2),
+            "face_score":  round(max_face, 3),
+            "has_face":    has_face,
             "is_unusable": is_unusable,
-            "label":      label,
+            "label":       label,
         }
 
     def _compute_score(
