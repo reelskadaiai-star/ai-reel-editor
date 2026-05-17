@@ -20,10 +20,12 @@ async function startAnalyze(jobId) {
 
   try {
     const job = await Job.findOne({ jobId });
+    // Build list of all video URLs (primary + any extra clips for multi-upload)
+    const videoUrls = [videoUrl(job.inputFile), ...(job.inputFiles || []).map(videoUrl)];
     const { data } = await axios.post(
       `${AI_URL}/analyze`,
-      { job_id: jobId, video_url: videoUrl(job.inputFile) },
-      { timeout: 120_000 }
+      { job_id: jobId, video_url: videoUrls[0], extra_video_urls: videoUrls.slice(1) },
+      { timeout: 180_000 }
     );
     await Job.findOneAndUpdate({ jobId }, { celeryTaskId: data.task_id, progress: 10 });
     logger.info(`[AI] Analyze task started: ${data.task_id}`);
@@ -40,23 +42,29 @@ async function startRender(jobId) {
 
   try {
     const job = await Job.findOne({ jobId });
+    const videoUrls = [videoUrl(job.inputFile), ...(job.inputFiles || []).map(videoUrl)];
     const { data } = await axios.post(
       `${AI_URL}/render`,
       {
         job_id: jobId,
-        video_url: videoUrl(job.inputFile),
+        video_url: videoUrls[0],
+        extra_video_urls: videoUrls.slice(1),
         music_url: job.musicFile ? videoUrl(job.musicFile) : null,
         template: job.template,
-        music_offset: job.musicOffset,
+        music_offset: job.musicOffset || 0,
         aspect_ratio: job.aspectRatio,
         caption_style: job.captionStyle,
-        transition_style: job.transitionStyle,
+        transition_style: job.transitionStyle || "fade",
+        transition_duration: job.transitionDuration || 0.3,
         target_duration: job.targetDurationSec,
         include_hook: job.includeHookText,
         hook_text: job.hookText,
         mute_audio: job.muteAudio || false,
         logo_url: job.logoFile ? videoUrl(job.logoFile) : null,
         logo_position: job.logoPosition || "bottom_right",
+        cta_text: job.ctaEnabled !== false ? (job.ctaText || "Follow for more 🔥") : null,
+        speed_ramp: job.speedRamp || false,
+        zoom_punch: job.zoomPunch !== false, // default true
       },
       { timeout: 300_000 }
     );

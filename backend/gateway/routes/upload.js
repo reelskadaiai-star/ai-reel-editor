@@ -44,7 +44,7 @@ const imageUpload = multer({
   },
 });
 
-// POST /api/upload  — upload raw video and queue analysis
+// POST /api/upload — upload a single video and queue analysis
 router.post("/", optionalAuth, upload.single("video"), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: "No video file provided" });
 
@@ -52,7 +52,7 @@ router.post("/", optionalAuth, upload.single("video"), async (req, res) => {
   const userId = req.user?.id || "anonymous";
 
   try {
-    const job = await Job.create({
+    await Job.create({
       jobId,
       userId,
       inputFile: req.file.filename,
@@ -62,13 +62,41 @@ router.post("/", optionalAuth, upload.single("video"), async (req, res) => {
       stage: "Queued for analysis",
     });
 
-    // Fire-and-forget: call HF Space directly (no Redis/Bull needed)
     setImmediate(() => startAnalyze(jobId));
-
     logger.info(`Job ${jobId} created — file: ${req.file.filename}`);
     res.status(201).json({ jobId, status: "queued" });
   } catch (err) {
     logger.error("Upload route error:", err);
+    res.status(500).json({ error: "Failed to create job" });
+  }
+});
+
+// POST /api/upload/multi — upload up to 5 video clips; HF Space merges before analysis
+router.post("/multi", optionalAuth, upload.array("videos", 5), async (req, res) => {
+  if (!req.files || req.files.length === 0)
+    return res.status(400).json({ error: "No video files provided" });
+
+  const jobId = uuidv4();
+  const userId = req.user?.id || "anonymous";
+  const [primary, ...extras] = req.files;
+
+  try {
+    await Job.create({
+      jobId,
+      userId,
+      inputFile: primary.filename,
+      inputFiles: extras.map((f) => f.filename),
+      inputMimeType: primary.mimetype,
+      fileSizeBytes: req.files.reduce((s, f) => s + f.size, 0),
+      status: "queued",
+      stage: `Queued — merging ${req.files.length} clip${req.files.length > 1 ? "s" : ""}`,
+    });
+
+    setImmediate(() => startAnalyze(jobId));
+    logger.info(`Job ${jobId} created (multi) — ${req.files.length} clips`);
+    res.status(201).json({ jobId, status: "queued", clipCount: req.files.length });
+  } catch (err) {
+    logger.error("Multi-upload route error:", err);
     res.status(500).json({ error: "Failed to create job" });
   }
 });

@@ -25,7 +25,7 @@ router.get("/:jobId", optionalAuth, async (req, res) => {
           { jobId },
           {
             status: "done",
-            stage: "Analysis complete — ready to render",
+            stage: "Analysis complete — confirm your content type",
             progress: 40,
             contentType: data.result.content_type,
             confidence: data.result.confidence,
@@ -37,6 +37,8 @@ router.get("/:jobId", optionalAuth, async (req, res) => {
             durationSeconds: data.result.duration,
             template: data.result.suggested_template,
             hookText: data.result.hook_text,
+            hookTextOptions: data.result.hook_text_options || [],
+            ctaText: data.result.cta_text || "Follow for more 🔥",
           }
         );
       } else if (data.state === "SUCCESS" && job.status === "rendering") {
@@ -77,9 +79,12 @@ router.patch("/:jobId", optionalAuth, async (req, res) => {
   const { jobId } = req.params;
   const allowed = [
     "template", "musicFile", "musicOffset", "aspectRatio",
-    "captionStyle", "transitionStyle", "targetDurationSec",
-    "includeHookText", "hookText",
+    "captionStyle", "transitionStyle", "transitionDuration", "targetDurationSec",
+    "includeHookText", "hookText", "hookTextOptions",
     "muteAudio", "logoFile", "logoPosition",
+    "contentType", "contentTypeConfirmed",
+    "ctaText", "ctaEnabled",
+    "speedRamp", "zoomPunch", "exportPreset",
   ];
   const updates = {};
   allowed.forEach((k) => { if (req.body[k] !== undefined) updates[k] = req.body[k]; });

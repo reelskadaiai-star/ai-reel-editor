@@ -13,6 +13,16 @@ export interface Segment {
   label: string;
 }
 
+export type ContentType =
+  | "real_estate" | "food" | "product" | "dance" | "travel" | "cinematic"
+  | "vlog" | "interview" | "comedy" | "fitness" | "education" | "lifestyle" | "unknown";
+
+export type TransitionStyle =
+  | "fade" | "wipeleft" | "wiperight" | "slideleft" | "slideright"
+  | "circleopen" | "dissolve" | "radial" | "zoomin" | "none" | "auto";
+
+export type ExportPreset = "reels" | "tiktok" | "shorts";
+
 export interface Job {
   _id: string;
   jobId: string;
@@ -23,27 +33,38 @@ export interface Job {
 
   // Input
   inputFile: string;
+  inputFiles?: string[];           // extra clips for multi-upload
   durationSeconds?: number;
   fileSizeBytes?: number;
 
   // Analysis
-  contentType: string;
+  contentType: ContentType;
+  contentTypeConfirmed?: boolean;
   confidence?: number;
   segments?: Segment[];
   captions?: Caption[];
   beatTimestamps?: number[];
   dominantColors?: string[];
   sceneCount?: number;
+  hookTextOptions?: string[];      // 3 AI-generated options for user to pick from
 
   // Edit config
   template: string;
   musicFile?: string;
   aspectRatio: string;
   captionStyle: string;
-  transitionStyle: string;
+  transitionStyle: TransitionStyle;
+  transitionDuration?: number;
   targetDurationSec: number;
   hookText?: string;
   includeHookText: boolean;
+  ctaText?: string;
+  ctaEnabled?: boolean;
+
+  // Effects
+  speedRamp?: boolean;
+  zoomPunch?: boolean;
+  exportPreset?: ExportPreset;
 
   // Output — filenames (on HF Space)
   outputFile?: string;

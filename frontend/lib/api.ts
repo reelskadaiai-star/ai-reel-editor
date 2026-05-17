@@ -39,8 +39,29 @@ export async function uploadVideo(file: File): Promise<{ jobId: string }> {
   fd.append("video", file);
   const { data } = await api.post<{ jobId: string; status: string }>("/api/upload", fd, {
     headers: { "Content-Type": "multipart/form-data" },
-    timeout: 120_000,
+    timeout: 180_000,
   });
+  return data;
+}
+
+/** Upload up to 5 clips at once — HF Space merges them automatically */
+export async function uploadMultipleVideos(
+  files: File[],
+  onProgress?: (pct: number) => void,
+): Promise<{ jobId: string; clipCount: number }> {
+  const fd = new FormData();
+  files.forEach((f) => fd.append("videos", f));
+  const { data } = await api.post<{ jobId: string; clipCount: number; status: string }>(
+    "/api/upload/multi",
+    fd,
+    {
+      headers: { "Content-Type": "multipart/form-data" },
+      timeout: 300_000,
+      onUploadProgress: (e) => {
+        if (onProgress && e.total) onProgress(Math.round((e.loaded / e.total) * 100));
+      },
+    }
+  );
   return data;
 }
 

@@ -39,18 +39,24 @@ const jobSchema = new mongoose.Schema(
     durationSeconds: Number,
     fileSizeBytes: Number,
 
+    // Input — multi-video support
+    inputFiles: [String], // additional clip filenames (merged before analysis)
+
     // AI Analysis results
     contentType: {
       type: String,
-      enum: ["real_estate", "food", "product", "dance", "travel", "cinematic", "vlog", "interview", "comedy", "unknown"],
+      enum: ["real_estate", "food", "product", "dance", "travel", "cinematic",
+             "vlog", "interview", "comedy", "fitness", "education", "lifestyle", "unknown"],
       default: "unknown",
     },
+    contentTypeConfirmed: { type: Boolean, default: false }, // user confirmed/overrode AI detection
     confidence: Number,
     segments: [segmentSchema],
     captions: [captionSchema],
     beatTimestamps: [Number],
     dominantColors: [String],
     sceneCount: Number,
+    hookTextOptions: [String], // 3 AI-generated hook options for user to pick from
 
     // Editing config (user can override)
     template: { type: String, default: "auto" },
@@ -58,10 +64,16 @@ const jobSchema = new mongoose.Schema(
     musicOffset: { type: Number, default: 0 },
     aspectRatio: { type: String, default: "9:16" },
     captionStyle: { type: String, default: "modern" },
-    transitionStyle: { type: String, default: "auto" },
+    transitionStyle: { type: String, default: "fade" },
+    transitionDuration: { type: Number, default: 0.3 },
     targetDurationSec: { type: Number, default: 30 },
     includeHookText: { type: Boolean, default: true },
     hookText: String,
+    ctaText: String,          // end-screen CTA e.g. "Follow for more 🔥"
+    ctaEnabled: { type: Boolean, default: true },
+    speedRamp: { type: Boolean, default: false }, // slow-mo on highlights
+    zoomPunch: { type: Boolean, default: true },  // subtle zoom punch on beat drops
+    exportPreset: { type: String, default: "reels" }, // reels | tiktok | shorts
 
     // User branding
     muteAudio: { type: Boolean, default: false },
