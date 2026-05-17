@@ -218,6 +218,12 @@ def _run_analyze(task_id: str, job_id: str, video_url: str, extra_video_urls: li
 
         _progress(task_id, 62, "Generating captions")
         captions = CaptionGenerator().transcribe(video_path)
+        captions_auto = False
+        if not captions:
+            _progress(task_id, 70, "No speech — generating content captions")
+            captions = _generate_content_captions(content_type, beats, duration)
+            captions_auto = True
+            logger.info(f"[Analyze] Auto-generated {len(captions)} captions for {content_type}")
 
         _progress(task_id, 78, "Scoring highlights")
         segments = detector.score_segments(beats, content_type)
@@ -234,6 +240,7 @@ def _run_analyze(task_id: str, job_id: str, video_url: str, extra_video_urls: li
                 "confidence": float(confidence),
                 "segments": segments,
                 "captions": captions,
+                "captions_auto_generated": captions_auto,
                 "beat_timestamps": beats,
                 "dominant_colors": dominant_colors,
                 "scene_count": len(scenes),
@@ -277,10 +284,14 @@ def _run_render(
         _progress(task_id, 18, "Re-analysing for render")
         detector = SceneDetector(video_path)
         scenes = detector.detect()
+        duration = detector.duration
         classifier = ContentClassifier()
         content_type, _, _ = classifier.classify(video_path, scenes)
         beats = AudioAnalyzer(video_path).detect_beats()
         captions = CaptionGenerator().transcribe(video_path)
+        if not captions:
+            captions = _generate_content_captions(content_type, beats, duration)
+            logger.info(f"[Render] Auto-generated {len(captions)} captions for {content_type}")
         segments = detector.score_segments(beats, content_type)
 
         # Download music
@@ -413,3 +424,223 @@ CTA_MAP = {
 def _suggest_template(ct): return TEMPLATE_MAP.get(ct, "generic_modern")
 def _generate_hook_options(ct): return HOOK_OPTIONS.get(ct, HOOK_OPTIONS["unknown"])
 def _generate_cta(ct): return CTA_MAP.get(ct, "Follow for more 🔥")
+
+
+# ── Auto-caption pools (shown when no speech detected) ────────────────
+# Short punchy overlays timed to beats — 3-6 words, visual-only context
+CAPTION_POOLS: dict[str, list[str]] = {
+    "real_estate": [
+        "Prime location 📍",
+        "Dream kitchen ✨",
+        "Stunning views 🌅",
+        "Open plan living 🏡",
+        "High ceilings ↕️",
+        "Natural light 🌤️",
+        "Brand new build 🔑",
+        "Move-in ready ✅",
+        "Luxury finishes 💎",
+        "Book a tour today 👇",
+    ],
+    "food": [
+        "Watch closely 👀",
+        "Secret ingredient 🤫",
+        "The flip 🍳",
+        "Golden brown ✨",
+        "Almost ready… ⏱️",
+        "The money shot 😍",
+        "Crispy perfection 🔥",
+        "Taste this 👇",
+        "Just like that ✨",
+        "Chef's kiss 🤌",
+    ],
+    "product": [
+        "Look at this 👀",
+        "Game changer 🔥",
+        "Premium quality ✨",
+        "Worth every penny 💯",
+        "The details 🔍",
+        "You need this 👇",
+        "Obsessed 😍",
+        "Before & after ↕️",
+        "Limited stock ⚡",
+        "Link in bio 🛒",
+    ],
+    "dance": [
+        "The transition 🔥",
+        "Clean footwork 💨",
+        "Hit the beat 🎵",
+        "Smooth 🌊",
+        "Level up 📈",
+        "Feel the music 🎶",
+        "Locked in 🎯",
+        "The drop 💥",
+        "Full send 🚀",
+        "Tutorial coming 👇",
+    ],
+    "travel": [
+        "Hidden gem 💎",
+        "You need to go 🌍",
+        "Worth the flight ✈️",
+        "Unreal views 😱",
+        "Local secret 🤫",
+        "Golden hour 🌅",
+        "Off the map 📍",
+        "Add to bucket list ✅",
+        "No filter needed ✨",
+        "More details in bio 👇",
+    ],
+    "fitness": [
+        "Feel the burn 🔥",
+        "No days off 💪",
+        "Rep 1 of many 📈",
+        "Form is everything ✅",
+        "Mind-muscle connection 🧠",
+        "Push through it 💥",
+        "Results don't lie 📊",
+        "60 days of this 🗓️",
+        "Full routine in bio 👇",
+        "You vs you 🏆",
+    ],
+    "education": [
+        "Did you know? 🧠",
+        "Step 1 👆",
+        "Step 2 ✌️",
+        "Step 3 🤟",
+        "Pro tip 💡",
+        "Most people miss this ⚠️",
+        "The secret 🤫",
+        "Game changer 🔥",
+        "Save this 🔖",
+        "Follow for more 👇",
+    ],
+    "lifestyle": [
+        "Morning routine ☀️",
+        "This changed everything ✨",
+        "Small habit 📈",
+        "Daily non-negotiable ✅",
+        "Level up your life 🚀",
+        "Consistency is key 🔑",
+        "The glow-up 💫",
+        "Aesthetic 🤍",
+        "Balance 🧘",
+        "More on my page 👇",
+    ],
+    "vlog": [
+        "A day in the life 📍",
+        "Morning ☀️",
+        "Afternoon 🌤️",
+        "Evening 🌙",
+        "Unexpected 😳",
+        "The highlight 🌟",
+        "Real moment 🎬",
+        "Unfiltered 🤍",
+        "New vlog out 👇",
+        "Come with me 🎒",
+    ],
+    "comedy": [
+        "POV: 👀",
+        "Me every morning 😭",
+        "Not me… 💀",
+        "The audacity 😤",
+        "Wait for it ⏳",
+        "Every. Single. Time. 🙄",
+        "No way 😱",
+        "We've all been here 😂",
+        "I cannot 💀",
+        "Tag someone 👇",
+    ],
+    "interview": [
+        "Golden advice 💡",
+        "Write this down 📝",
+        "Key insight 🔑",
+        "Changed my mindset 🧠",
+        "Unpopular opinion 🗣️",
+        "The truth 💯",
+        "This hit different 🎯",
+        "Share this 🔁",
+        "Full interview in bio 👇",
+        "Bookmark this 🔖",
+    ],
+    "cinematic": [
+        "Shot on location 📍",
+        "Golden hour 🌅",
+        "No edits ✨",
+        "Natural light 🌤️",
+        "The moment 🎬",
+        "Unscripted 🤍",
+        "Raw beauty 🌿",
+        "Frame by frame 🎞️",
+        "Behind the scenes in bio 👇",
+        "More like this 📸",
+    ],
+    "unknown": [
+        "Watch till the end 👀",
+        "Unexpected 😱",
+        "Trust the process ✨",
+        "The reveal 🔓",
+        "Worth it 💯",
+        "You won't regret it 🔥",
+        "Save this 🔖",
+        "Share with a friend 👇",
+        "Real talk 🎯",
+        "More coming 📲",
+    ],
+}
+
+
+def _generate_content_captions(
+    content_type: str,
+    beats: list[float],
+    duration: float,
+    caption_hold: float = 2.5,
+) -> list[dict]:
+    """
+    Generate contextual text overlays for silent videos.
+
+    Strategy:
+    - Pick phrases from the content-type pool in order.
+    - Space them across the video, snapping to beats where available.
+    - Each caption is shown for `caption_hold` seconds.
+    - Target ~1 caption every 5-6 seconds (so ~5-8 for a 30s reel).
+    """
+    import random
+
+    pool = CAPTION_POOLS.get(content_type, CAPTION_POOLS["unknown"])
+    # Shuffle a copy so captions vary between renders
+    phrases = pool[:]
+    random.shuffle(phrases)
+
+    if duration <= 0:
+        duration = 30.0
+
+    # Decide how many captions to show
+    n = max(3, min(len(phrases), int(duration / 5)))
+
+    # Evenly space target times across the video (skip first & last 2s)
+    start_offset = 2.0
+    end_offset = duration - 2.5
+    span = max(1.0, end_offset - start_offset)
+    step = span / n
+
+    result = []
+    for i in range(n):
+        ideal_t = start_offset + i * step
+
+        # Snap to nearest beat within a ±1.5 s window
+        if beats:
+            candidates = [b for b in beats if abs(b - ideal_t) <= 1.5]
+            t = min(candidates, key=lambda b: abs(b - ideal_t)) if candidates else ideal_t
+        else:
+            t = ideal_t
+
+        end_t = min(t + caption_hold, duration - 0.2)
+        result.append({
+            "start": round(t, 2),
+            "end":   round(end_t, 2),
+            "text":  phrases[i % len(phrases)],
+            "style": "bold",   # eye-catching default for silent videos
+        })
+
+    # Sort chronologically (beat-snapping can shuffle order slightly)
+    result.sort(key=lambda c: c["start"])
+    return result
