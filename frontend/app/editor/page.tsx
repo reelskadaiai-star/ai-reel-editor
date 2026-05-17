@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, Suspense } from "react";
+import { useState, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { ArrowLeft, Download, RefreshCw, Wand2 } from "lucide-react";
@@ -10,10 +10,11 @@ import AnalysisPanel from "@/components/editor/AnalysisPanel";
 import TemplateSelector from "@/components/editor/TemplateSelector";
 import AudioPicker from "@/components/editor/AudioPicker";
 import ReelPreview from "@/components/editor/ReelPreview";
-import ExportModal from "@/components/editor/ExportModal";
 import StatusTracker from "@/components/editor/StatusTracker";
 import { fetchJob, renderJob, updateJob } from "@/lib/api";
 import type { Job } from "@/lib/types";
+
+const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 
 type EditorTab = "template" | "audio" | "captions";
 
@@ -21,63 +22,56 @@ function EditorInner() {
   const searchParams = useSearchParams();
   const jobId = searchParams.get("id") ?? "";
   const router = useRouter();
-
   const [activeTab, setActiveTab] = useState<EditorTab>("template");
-  const [showExport, setShowExport] = useState(false);
-  const [rendering, setRendering] = useState(false);
 
   const { data: job, mutate } = useSWR<Job>(
     jobId ? `/jobs/${jobId}` : null,
     () => fetchJob(jobId),
     {
-      refreshInterval: (job) => {
-        if (!job) return 3000;
-        if (["done", "failed"].includes(job.status) && job.progress >= 100) return 0;
+      refreshInterval: (j) => {
+        if (!j) return 3000;
+        // Stop polling once fully done or failed
+        if (j.outputFile || j.status === "failed") return 0;
         return 3000;
       },
     }
   );
 
-  // Once the server confirms "rendering", hand off to SWR and drop the local flag
-  useEffect(() => {
-    if (job?.status === "rendering" || job?.status === "done" || job?.status === "failed") {
-      setRendering(false);
-    }
-  }, [job?.status]);
-
-  const isAnalyzing = job?.status === "analyzing" || job?.status === "queued";
-  // Include local `rendering` flag so the UI responds immediately on first click,
-  // before SWR has had a chance to re-fetch the updated status from the server.
-  const isRendering = job?.status === "rendering" || rendering;
-  const isReadyToRender = job?.status === "done" && (job.progress ?? 0) >= 40 && !job.outputFile && !rendering;
+  const isAnalyzing = job?.status === "queued" || job?.status === "analyzing";
+  const isRendering = job?.status === "rendering";
+  const isReadyToRender = job?.status === "done" && (job.progress ?? 0) >= 40 && !job.outputFile;
   const isRendered = !!job?.outputFile;
-  const isFailed = job?.status === "failed" && !rendering;
+  const isFailed = job?.status === "failed";
 
   async function handleRender() {
-    if (!job) return;
-    setRendering(true);
+    if (!job || isRendering || isRendered) return;
+
+    // ── Optimistic update: flip to "rendering" in the SWR cache immediately ──
+    // This makes the StatusTracker appear on the FIRST click, before the server
+    // responds. SWR polling will then sync real progress from the server.
+    mutate(
+      { ...job, status: "rendering", stage: "Rendering queued", progress: 50 },
+      { revalidate: false }
+    );
+
     try {
       await renderJob(jobId);
-      toast.success("Rendering started!");
-      // Trigger a background re-fetch; `rendering` stays true until job.status
-      // comes back as "rendering" from the server, keeping the UI locked.
-      mutate();
+      mutate(); // kick off a real re-fetch to sync server state
     } catch (err: any) {
       toast.error(err?.response?.data?.error || "Render failed");
-      // Only clear on error — on success the SWR update will take over
-      setRendering(false);
+      mutate(); // revert to real server state on error
     }
   }
 
-  async function handleTemplateChange(templateId: string) {
-    await updateJob(jobId, { template: templateId });
+  async function handleTemplateChange(t: string) {
+    await updateJob(jobId, { template: t });
     mutate();
   }
 
   if (!jobId) {
     return (
       <div className="min-h-dvh flex items-center justify-center text-white/40">
-        No job ID provided.{" "}
+        No job ID.{" "}
         <button onClick={() => router.push("/")} className="underline ml-1">Go home</button>
       </div>
     );
@@ -85,6 +79,7 @@ function EditorInner() {
 
   return (
     <div className="min-h-dvh flex flex-col bg-surface-900">
+      {/* ── Header ── */}
       <header className="flex items-center justify-between px-4 py-3 border-b border-white/5 glass sticky top-0 z-40">
         <button onClick={() => router.push("/")} className="btn-ghost flex items-center gap-1.5 text-sm">
           <ArrowLeft className="w-4 h-4" /> Back
@@ -92,8 +87,8 @@ function EditorInner() {
         <div className="flex items-center gap-2">
           {job && (
             <span className={`badge text-xs ${
-              isFailed ? "bg-red-500/15 text-red-400" :
-              isRendered ? "bg-green-500/15 text-green-400" :
+              isFailed    ? "bg-red-500/15 text-red-400"    :
+              isRendered  ? "bg-green-500/15 text-green-400" :
               isRendering ? "bg-orange-500/15 text-orange-400" :
               isAnalyzing ? "bg-brand-500/15 text-brand-400" :
               "bg-white/10 text-white/60"
@@ -101,41 +96,63 @@ function EditorInner() {
               {isFailed ? "Failed" : isRendered ? "Ready" : isRendering ? "Rendering…" : isAnalyzing ? "Analysing…" : "Analysed"}
             </span>
           )}
+          {/* Direct download link — no modal, no payment */}
           {isRendered && (
-            <button onClick={() => setShowExport(true)} className="btn-primary flex items-center gap-2 text-sm py-2 px-4">
+            <a
+              href={`${API}/api/jobs/${jobId}/download`}
+              download
+              className="btn-primary flex items-center gap-2 text-sm py-2 px-4"
+            >
               <Download className="w-4 h-4" /> Download
-            </button>
+            </a>
           )}
         </div>
       </header>
 
+      {/* ── Body ── */}
       <div className="flex-1 flex flex-col lg:flex-row gap-0 overflow-hidden">
+        {/* Left panel — preview + generate button */}
         <div className="lg:w-[400px] lg:sticky lg:top-[57px] lg:h-[calc(100dvh-57px)] flex flex-col items-center justify-center p-4 border-r border-white/5">
           <ReelPreview job={job} />
+
           {isReadyToRender && (
             <motion.button
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               onClick={handleRender}
-              disabled={rendering}
               className="btn-primary mt-5 w-full flex items-center justify-center gap-2"
             >
-              {rendering ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
-              {rendering ? "Starting render…" : "Generate Reel"}
+              <Wand2 className="w-4 h-4" />
+              Generate Reel
             </motion.button>
           )}
+
+          {isRendering && (
+            <div className="mt-5 flex items-center gap-2 text-orange-400 text-sm">
+              <RefreshCw className="w-4 h-4 animate-spin" />
+              Rendering your reel…
+            </div>
+          )}
+
           {isFailed && (
             <div className="mt-4 text-center">
-              <p className="text-red-400 text-sm mb-2">Something went wrong: {job?.error}</p>
-              <button onClick={handleRender} className="btn-ghost text-sm">Try again</button>
+              <p className="text-red-400 text-sm mb-2">{job?.error || "Something went wrong"}</p>
+              <button onClick={() => mutate()} className="btn-ghost text-sm">Retry</button>
             </div>
           )}
         </div>
 
+        {/* Right panel — status + editor tabs */}
         <div className="flex-1 overflow-y-auto">
           <AnimatePresence>
             {(isAnalyzing || isRendering) && (
-              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="p-4">
+              <motion.div
+                key="status"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="p-4"
+              >
                 <StatusTracker job={job} />
               </motion.div>
             )}
@@ -190,15 +207,10 @@ function EditorInner() {
           )}
         </div>
       </div>
-
-      <AnimatePresence>
-        {showExport && job && <ExportModal job={job} onClose={() => setShowExport(false)} />}
-      </AnimatePresence>
     </div>
   );
 }
 
-// useSearchParams requires a Suspense boundary in Next.js static export
 export default function EditorPage() {
   return (
     <Suspense fallback={<div className="min-h-dvh flex items-center justify-center text-white/40">Loading…</div>}>
@@ -207,8 +219,7 @@ export default function EditorPage() {
   );
 }
 
-function fmtTime(sec: number): string {
-  const m = Math.floor(sec / 60);
-  const s = Math.floor(sec % 60);
-  return `${m}:${s.toString().padStart(2, "0")}`;
+function fmtTime(s: number) {
+  const m = Math.floor(s / 60);
+  return `${m}:${Math.floor(s % 60).toString().padStart(2, "0")}`;
 }
